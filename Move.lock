@@ -1,0 +1,34 @@
+
+[move]
+version = 3
+manifest_digest = "3F858180575615CA078F865A9402DC3C92D32B7C0933DA5E5B1214DF17FE8343"
+deps_digest = "3C4103934B1E040BB6B23F1D610B4EF9F2F1166A50A104EADCF77467C004C600"
+dependencies = [
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "MySocial", name = "MySocial" },
+]
+
+[[move.package]]
+id = "MoveStdlib"
+source = { local = "../mys-framework/packages/move-stdlib" }
+
+[[move.package]]
+id = "MySocial"
+source = { local = "../mys-framework/packages/mys-framework" }
+
+dependencies = [
+  { id = "MoveStdlib", name = "MoveStdlib" },
+]
+
+[move.toolchain-version]
+compiler-version = "1.43.1"
+edition = "2024"
+flavor = "mys"
+
+[env]
+
+[env.localnet]
+chain-id = "e2a2f1e6"
+original-published-id = "0xf061d5d1e105ee460a3259c4fa77b394e4eed3785321306c62ddbbd1df088195"
+latest-published-id = "0xf061d5d1e105ee460a3259c4fa77b394e4eed3785321306c62ddbbd1df088195"
+published-version = "1"

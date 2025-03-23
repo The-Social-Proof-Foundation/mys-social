@@ -1,0 +1,31 @@
+---
+compiled_package_info:
+  package_name: MySocialContracts
+  address_alias_instantiation:
+    mys: "0000000000000000000000000000000000000000000000000000000000000002"
+    social_contracts: "0000000000000000000000000000000000000000000000000000000000000000"
+    std: "0000000000000000000000000000000000000000000000000000000000000001"
+  source_digest: 2919CC31267DD994DEA786FB70CFC0AC24CE252C16CF660D0BA82E6E97BCBCF7
+  build_flags:
+    dev_mode: false
+    test_mode: false
+    generate_docs: false
+    save_disassembly: false
+    install_dir: ~
+    force_recompilation: false
+    lock_file: "./Move.lock"
+    fetch_deps_only: false
+    skip_fetch_latest_git_deps: false
+    default_flavor: mys
+    default_edition: ~
+    deps_as_root: false
+    silence_warnings: false
+    warnings_are_errors: false
+    json_errors: false
+    additional_named_addresses: {}
+    lint_flag:
+      no_lint: false
+      lint: false
+dependencies:
+  - MoveStdlib
+  - MySocial

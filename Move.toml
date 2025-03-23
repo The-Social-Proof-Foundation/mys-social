@@ -1,0 +1,13 @@
+[package]
+name = "MySocialContracts"
+version = "0.1.0"
+published-at = ""
+edition = "2024"
+
+[dependencies]
+MoveStdlib = { local = "../mys-framework/packages/move-stdlib" }
+MySocial = { local = "../mys-framework/packages/mys-framework" }
+
+[addresses]
+mys = "0x2"
+social_contracts = "0x0"
