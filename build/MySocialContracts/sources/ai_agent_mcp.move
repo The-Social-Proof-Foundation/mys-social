@@ -1,5 +1,5 @@
 #[allow(unused_variable, unused_use, duplicate_alias)]
-module social_contracts::ai_agent_mpc {
+module social_contracts::ai_agent_mcp {
     use mys::object::{Self, ID};
     
     public struct AgentCap has key, store {

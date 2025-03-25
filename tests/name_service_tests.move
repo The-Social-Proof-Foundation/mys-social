@@ -7,8 +7,7 @@ module social_contracts::name_service_tests {
     use std::string;
     
     use mys::test_scenario;
-    use social_contracts::profile::{Self, Profile};
-    use social_contracts::name_service::{Self, NameRegistry, Username};
+    use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use mys::coin::{Self, Coin};
     use mys::mys::MYS;
     use mys::clock;
@@ -19,19 +18,16 @@ module social_contracts::name_service_tests {
     const USER2: address = @0x2;
     
     #[test]
-    fun test_create_registry() {
+    fun test_username_registry_creation() {
         let scenario = test_scenario::begin(ADMIN);
         {
-            // Create and share registry
-            name_service::create_and_share_registry(
-                test_scenario::ctx(&mut scenario)
-            );
+            // Module initialization will create and share the registry automatically
         };
         
         // Check registry exists in the next transaction
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             test_scenario::return_shared(registry);
         };
         
@@ -39,14 +35,9 @@ module social_contracts::name_service_tests {
     }
     
     #[test]
-    fun test_register_username() {
+    fun test_create_profile_with_username() {
         let scenario = test_scenario::begin(ADMIN);
         {
-            // Create and share registry
-            name_service::create_and_share_registry(
-                test_scenario::ctx(&mut scenario)
-            );
-            
             // Create test clock
             clock::create_for_testing(test_scenario::ctx(&mut scenario));
             
@@ -55,30 +46,22 @@ module social_contracts::name_service_tests {
             mys::transfer::transfer(coins, USER1);
         };
         
-        // Create a profile
+        // Create a profile with username
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            profile::create_profile(
-                string::utf8(b"User One"),
-                string::utf8(b"This is my bio"),
-                b"https://example.com/image.png",
-                test_scenario::ctx(&mut scenario)
-            );
-        };
-        
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let clock = test_scenario::take_shared<clock::Clock>(&scenario);
             let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
-            let profile = test_scenario::take_from_sender<Profile>(&scenario);
-            let profile_id = object::uid_to_address(profile::id(&profile));
             
-            // Register username and link to profile
-            name_service::register_username(
+            // Create profile with username
+            profile::create_profile_with_username(
                 &mut registry,
-                profile_id,
+                string::utf8(b"User One"),
                 string::utf8(b"testname"),
+                string::utf8(b"This is my bio"),
+                b"https://example.com/image.png",
+                b"",
+                string::utf8(b"user@example.com"),
                 &mut coins,
                 &clock,
                 test_scenario::ctx(&mut scenario)
@@ -87,41 +70,37 @@ module social_contracts::name_service_tests {
             test_scenario::return_shared(registry);
             test_scenario::return_shared(clock);
             test_scenario::return_to_sender(&scenario, coins);
-            test_scenario::return_to_sender(&scenario, profile);
         };
         
-        // Check username exists in the next transaction
+        // Check profile has username in the next transaction
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let username = test_scenario::take_from_sender<Username>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Check profile has username
+            assert!(profile::has_username(&profile), 0);
+            let username_opt = profile::username(&profile);
+            assert!(std::option::is_some(&username_opt), 0);
+            assert!(std::option::extract(&username_opt) == string::utf8(b"testname"), 0);
+            
+            // Check registry mapping
             let profile_id = object::uid_to_address(profile::id(&profile));
+            let lookup_result = profile::lookup_profile_by_username(&registry, string::utf8(b"testname"));
+            assert!(std::option::is_some(&lookup_result), 0);
+            assert!(std::option::extract(&lookup_result) == profile_id, 0);
             
-            // Check username properties
-            assert!(name_service::name(&username) == string::utf8(b"testname"), 0);
-            assert!(name_service::owner(&username) == USER1, 0);
-            
-            // Check profile link
-            let profile_link = name_service::get_profile_id(&username);
-            assert!(std::option::is_some(&profile_link), 0);
-            assert!(std::option::extract(&profile_link) == profile_id, 0);
-            
-            test_scenario::return_to_sender(&scenario, username);
             test_scenario::return_to_sender(&scenario, profile);
+            test_scenario::return_shared(registry);
         };
         
         test_scenario::end(scenario);
     }
     
     #[test]
-    fun test_only_one_username_per_user() {
+    fun test_change_username() {
         let scenario = test_scenario::begin(ADMIN);
         {
-            // Create and share registry
-            name_service::create_and_share_registry(
-                test_scenario::ctx(&mut scenario)
-            );
-            
             // Create test clock
             clock::create_for_testing(test_scenario::ctx(&mut scenario));
             
@@ -130,31 +109,45 @@ module social_contracts::name_service_tests {
             mys::transfer::transfer(coins, USER1);
         };
         
-        // Create a profile
+        // Create a profile with username
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            profile::create_profile(
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            
+            // Create profile with username
+            profile::create_profile_with_username(
+                &mut registry,
                 string::utf8(b"User One"),
+                string::utf8(b"oldname"),
                 string::utf8(b"This is my bio"),
                 b"https://example.com/image.png",
+                b"",
+                string::utf8(b"user@example.com"),
+                &mut coins,
+                &clock,
                 test_scenario::ctx(&mut scenario)
             );
+            
+            test_scenario::return_shared(registry);
+            test_scenario::return_shared(clock);
+            test_scenario::return_to_sender(&scenario, coins);
         };
         
-        // Register a username
+        // Change username
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let clock = test_scenario::take_shared<clock::Clock>(&scenario);
             let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
-            let profile_id = object::uid_to_address(profile::id(&profile));
             
-            // Register and assign username
-            name_service::register_username(
+            // Change username
+            profile::change_username(
                 &mut registry,
-                profile_id,
-                string::utf8(b"user1"),
+                &mut profile,
+                string::utf8(b"newname"),
                 &mut coins,
                 &clock,
                 test_scenario::ctx(&mut scenario)
@@ -166,115 +159,203 @@ module social_contracts::name_service_tests {
             test_scenario::return_to_sender(&scenario, profile);
         };
         
-        // Create another profile
+        // Check new username is set
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            profile::create_profile(
-                string::utf8(b"Second Profile"),
-                string::utf8(b"My second profile"),
-                b"https://example.com/image2.png",
-                test_scenario::ctx(&mut scenario)
-            );
-        };
-        
-        // Try to register a second username - should fail
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
-            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
-            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             
-            // Get the second profile
-            let mut found_second_profile = false;
-            let profiles = test_scenario::ids_for_sender<Profile>(&scenario);
-            let profile2_id = object::id_from_address(@0x0); // Placeholder
+            // Check profile has new username
+            assert!(profile::has_username(&profile), 0);
+            let username_opt = profile::username(&profile);
+            assert!(std::option::is_some(&username_opt), 0);
+            assert!(std::option::extract(&username_opt) == string::utf8(b"newname"), 0);
             
-            let mut i = 0;
-            let len = vector::length(&profiles);
-            while (i < len) {
-                let id = *vector::borrow(&profiles, i);
-                let profile = test_scenario::take_from_sender_by_id<Profile>(&scenario, id);
-                if (profile::name(&profile) == string::utf8(b"Second Profile")) {
-                    found_second_profile = true;
-                    profile2_id = object::id(&profile);
-                };
-                test_scenario::return_to_sender(&scenario, profile);
-                i = i + 1;
-            };
+            // Check old username is removed from registry
+            let old_lookup = profile::lookup_profile_by_username(&registry, string::utf8(b"oldname"));
+            assert!(std::option::is_none(&old_lookup), 0);
             
-            assert!(found_second_profile, 0);
+            // Check new username is in registry
+            let new_lookup = profile::lookup_profile_by_username(&registry, string::utf8(b"newname"));
+            assert!(std::option::is_some(&new_lookup), 0);
             
-            // This should fail because the user already has a username
-            let failed = false;
-            if (!failed) {
-                // In a real test we'd use test_scenario::next_epoch and test_scenario::expect_abort
-                // For simplicity, we're just asserting - this test would actually abort in practice
-                let profile2_address = object::id_to_address(&profile2_id);
-                
-                // Comment out actual call because it would abort
-                // name_service::register_username(
-                //     &mut registry,
-                //     profile2_address,
-                //     string::utf8(b"user2"),
-                //     &mut coins,
-                //     &clock,
-                //     test_scenario::ctx(&mut scenario)
-                // );
-                
-                // Just confirm the user already has a username
-                assert!(table::contains(&registry.owner_names, USER1), 1);
-            };
-            
+            test_scenario::return_to_sender(&scenario, profile);
             test_scenario::return_shared(registry);
-            test_scenario::return_shared(clock);
-            test_scenario::return_to_sender(&scenario, coins);
         };
         
         test_scenario::end(scenario);
     }
     
     #[test]
-    fun test_unassign_from_profile() {
+    fun test_transfer_profile_with_new_username() {
         let scenario = test_scenario::begin(ADMIN);
         {
-            // Create and share registry
-            name_service::create_and_share_registry(
-                test_scenario::ctx(&mut scenario)
-            );
-            
             // Create test clock
             clock::create_for_testing(test_scenario::ctx(&mut scenario));
             
             // Mint coins for test
-            let coins = coin::mint_for_testing<MYS>(20_000_000_000, test_scenario::ctx(&mut scenario));
+            let coins = coin::mint_for_testing<MYS>(100_000_000_000, test_scenario::ctx(&mut scenario));
             mys::transfer::transfer(coins, USER1);
+            
+            let coins2 = coin::mint_for_testing<MYS>(100_000_000_000, test_scenario::ctx(&mut scenario));
+            mys::transfer::transfer(coins2, USER2);
         };
         
-        // Create a profile
+        // Create a profile with username
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            profile::create_profile(
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            
+            // Create profile with username
+            profile::create_profile_with_username(
+                &mut registry,
                 string::utf8(b"User One"),
+                string::utf8(b"user1"),
                 string::utf8(b"This is my bio"),
                 b"https://example.com/image.png",
+                b"",
+                string::utf8(b"user@example.com"),
+                &mut coins,
+                &clock,
                 test_scenario::ctx(&mut scenario)
             );
+            
+            test_scenario::return_shared(registry);
+            test_scenario::return_shared(clock);
+            test_scenario::return_to_sender(&scenario, coins);
         };
         
-        // Register a username
+        // Transfer profile to USER2 with new username
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let clock = test_scenario::take_shared<clock::Clock>(&scenario);
             let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
-            let profile_id = object::uid_to_address(profile::id(&profile));
             
-            // Register username with profile
-            name_service::register_username(
+            // First change username, then transfer the profile
+            profile::change_username(
                 &mut registry,
-                profile_id,
-                string::utf8(b"user1"),
+                &mut profile,
+                string::utf8(b"user2"),
+                &mut coins,
+                &clock,
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            // Transfer profile
+            profile::transfer_profile(
+                &mut registry,
+                profile, // Pass by value, not reference
+                USER2,
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+            test_scenario::return_shared(clock);
+            test_scenario::return_to_sender(&scenario, coins);
+            // Note: profile is consumed so no need to return it
+        };
+        
+        // Check profile was transferred with new username
+        test_scenario::next_tx(&mut scenario, USER2);
+        {
+            let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Check profile ownership
+            assert!(profile::owner(&profile) == USER2, 0);
+            
+            // Check profile has new username
+            assert!(profile::has_username(&profile), 0);
+            let username_opt = profile::username(&profile);
+            assert!(std::option::is_some(&username_opt), 0);
+            assert!(std::option::extract(&username_opt) == string::utf8(b"user2"), 0);
+            
+            // Check old username is removed from registry
+            let old_lookup = profile::lookup_profile_by_username(&registry, string::utf8(b"user1"));
+            assert!(std::option::is_none(&old_lookup), 0);
+            
+            // Check new username is in registry
+            let new_lookup = profile::lookup_profile_by_username(&registry, string::utf8(b"user2"));
+            assert!(std::option::is_some(&new_lookup), 0);
+            
+            test_scenario::return_to_sender(&scenario, profile);
+            test_scenario::return_shared(registry);
+        };
+        
+        test_scenario::end(scenario);
+    }
+    
+    #[test]
+    fun test_renew_username() {
+        let scenario = test_scenario::begin(ADMIN);
+        {
+            // Create test clock
+            clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            
+            // Mint coins for test
+            let coins = coin::mint_for_testing<MYS>(100_000_000_000, test_scenario::ctx(&mut scenario));
+            mys::transfer::transfer(coins, USER1);
+        };
+        
+        // Create a profile with username
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            
+            // Create profile with username
+            profile::create_profile_with_username(
+                &mut registry,
+                string::utf8(b"User One"),
+                string::utf8(b"renewme"),
+                string::utf8(b"This is my bio"),
+                b"https://example.com/image.png",
+                b"",
+                string::utf8(b"user@example.com"),
+                &mut coins,
+                &clock,
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+            test_scenario::return_shared(clock);
+            test_scenario::return_to_sender(&scenario, coins);
+        };
+        
+        // Get original expiry
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            
+            // Check original expiry
+            let expiry_opt = profile::username_expiry(&profile);
+            assert!(std::option::is_some(&expiry_opt), 0);
+            let original_expiry = std::option::extract(&expiry_opt);
+            
+            // Remember original expiry for later comparison
+            test_scenario::ctx(&mut scenario).store(original_expiry);
+            
+            test_scenario::return_to_sender(&scenario, profile);
+        };
+        
+        // Renew username
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            
+            // Renew for 6 more epochs
+            profile::renew_username(
+                &mut registry,
+                &mut profile,
+                6, 
                 &mut coins,
                 &clock,
                 test_scenario::ctx(&mut scenario)
@@ -286,36 +367,20 @@ module social_contracts::name_service_tests {
             test_scenario::return_to_sender(&scenario, profile);
         };
         
-        // Unassign username from profile
+        // Check expiry was extended
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
-            let profile_id = object::uid_to_address(profile::id(&profile));
+            let original_expiry: u64 = test_scenario::ctx(&mut scenario).load();
             
-            // Unassign from profile
-            name_service::unassign_from_profile(
-                &mut registry,
-                profile_id,
-                test_scenario::ctx(&mut scenario)
-            );
+            // Check new expiry
+            let expiry_opt = profile::username_expiry(&profile);
+            assert!(std::option::is_some(&expiry_opt), 0);
+            let new_expiry = std::option::extract(&expiry_opt);
             
-            test_scenario::return_shared(registry);
-            test_scenario::return_to_sender(&scenario, profile);
-        };
-        
-        // Check username is unassigned
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let registry = test_scenario::take_shared<NameRegistry>(&scenario);
-            let profile = test_scenario::take_from_sender<Profile>(&scenario);
-            let profile_id = object::uid_to_address(profile::id(&profile));
+            // New expiry should be greater than original
+            assert!(new_expiry > original_expiry, 0);
             
-            // Check profile doesn't have a username in registry
-            let username_id = name_service::get_username_for_profile(&registry, profile_id);
-            assert!(std::option::is_none(&username_id), 0);
-            
-            test_scenario::return_shared(registry);
             test_scenario::return_to_sender(&scenario, profile);
         };
         
