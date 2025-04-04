@@ -3,10 +3,11 @@
 
 /// Platform module for the MySocial network
 /// Manages social media platforms and their timelines
+#[allow(unused_use, duplicate_alias, unused_const)]
 module social_contracts::platform {
     use std::string::{Self, String};
     use std::vector;
-    use std::option::{Self, Option};
+    use std::option;
     
     use mys::dynamic_field;
     use mys::vec_set::{Self, VecSet};
@@ -18,19 +19,17 @@ module social_contracts::platform {
     use mys::coin::{Self, Coin};
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
-    use mys::url::{Self, Url};
+    use mys::url;
     
-    use social_contracts::profile::{Self, Profile};
-    use social_contracts::post::{Self, Post};
-    use social_contracts::block_list::{Self, BlockList, BlockListRegistry};
+    use social_contracts::profile;
+    use social_contracts::post;
+    use social_contracts::block_list::{Self, BlockListRegistry};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
-    const EPlatformNotFound: u64 = 1;
     const EPlatformAlreadyExists: u64 = 2;
     const EInvalidTokenAmount: u64 = 3;
     const ENotContractOwner: u64 = 7;
-    const EEntityBlocked: u64 = 8;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -710,7 +709,7 @@ module social_contracts::platform {
     }
     
     /// Check if a profile is blocked in a platform by ID
-    public fun is_profile_blocked_by_id(platform_id: address, profile_id: address): bool {
+    public fun is_profile_blocked_by_id(_platform_id: address, _profile_id: address): bool {
         false // Placeholder implementation (would need to borrow object by ID)
     }
 
