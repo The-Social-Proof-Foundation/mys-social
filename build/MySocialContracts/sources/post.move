@@ -1,4 +1,4 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Post module for the MySocial network
@@ -19,7 +19,7 @@ module social_contracts::post {
     use mys::url::{Self, Url};
     
     use social_contracts::profile::{Self, Profile};
-    use social_contracts::reputation;
+    use social_contracts::platform;
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -47,6 +47,8 @@ module social_contracts::post {
         comment_count: u64,
         /// Tips received in MYS tokens
         tips_received: Balance<MYS>,
+        /// Whether the post has been removed from its platform
+        removed_from_platform: bool,
     }
 
     /// Comment object for posts
@@ -114,6 +116,14 @@ module social_contracts::post {
         is_post: bool,
     }
 
+    /// Post moderation event
+    public struct PostModerationEvent has copy, drop {
+        post_id: address,
+        platform_id: address,
+        removed: bool,
+        moderated_by: address,
+    }
+
     /// Create a new post
     public fun create_post(
         author_profile: &Profile,
@@ -143,6 +153,7 @@ module social_contracts::post {
             like_count: 0,
             comment_count: 0,
             tips_received: balance::zero(),
+            removed_from_platform: false,
         };
         
         // Initialize likes collection for this post
@@ -163,9 +174,6 @@ module social_contracts::post {
             content: post.content,
             mentions: post.mentions,
         });
-        
-        // Update author's reputation for creating content
-        reputation::add_content_points(object::id(author_profile), 5, ctx);
         
         post
     }
@@ -238,12 +246,6 @@ module social_contracts::post {
             author: author_id,
             content,
         });
-        
-        // Update author's reputation for creating content
-        reputation::add_content_points(object::id(author_profile), 2, ctx);
-        
-        // Update post author's reputation for engagement
-        reputation::add_engagement_points(object::id(author_profile), 1, ctx);
     }
 
     /// Like a post
@@ -274,9 +276,6 @@ module social_contracts::post {
             user: user_id,
             is_post: true,
         });
-        
-        // Update post author's reputation for receiving engagement
-        reputation::add_engagement_points(object::id(user_profile), 1, ctx);
     }
 
     /// Unlike a post
@@ -337,9 +336,6 @@ module social_contracts::post {
             user: user_id,
             is_post: false,
         });
-        
-        // Update comment author's reputation for receiving engagement
-        reputation::add_engagement_points(object::id(user_profile), 1, ctx);
     }
 
     /// Unlike a comment
@@ -399,9 +395,6 @@ module social_contracts::post {
             amount,
             is_post: true,
         });
-        
-        // Update reputation for tipper
-        reputation::add_tip_points(object::id(tipper_profile), amount, ctx);
     }
 
     /// Tip a comment with MYS tokens
@@ -431,9 +424,29 @@ module social_contracts::post {
             amount,
             is_post: false,
         });
+    }
+
+    /// Moderate a post (remove/restore from platform)
+    public entry fun moderate_post(
+        post: &mut Post,
+        platform: &platform::Platform,
+        remove: bool,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform developer or moderator
+        let caller = tx_context::sender(ctx);
+        assert!(platform::is_developer_or_moderator(platform, caller), EUnauthorized);
         
-        // Update reputation for tipper
-        reputation::add_tip_points(object::id(tipper_profile), amount, ctx);
+        // Update post status
+        post.removed_from_platform = remove;
+        
+        // Emit moderation event
+        event::emit(PostModerationEvent {
+            post_id: object::uid_to_address(&post.id),
+            platform_id: object::uid_to_address(platform::id(platform)),
+            removed: remove,
+            moderated_by: caller,
+        });
     }
 
     // === Getters ===

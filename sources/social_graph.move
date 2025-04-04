@@ -1,4 +1,4 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Social graph module for the MySocial network
@@ -42,94 +42,86 @@ module social_contracts::social_graph {
         unfollowed: address,
     }
 
-    /// Create and share the global social graph object
-    /// This should be called once during system initialization
-    public fun initialize(ctx: &mut TxContext) {
+    /// Module initializer to create the social graph
+    fun init(ctx: &mut TxContext) {
         let social_graph = SocialGraph {
             id: object::new(ctx),
             following: table::new(ctx),
             followers: table::new(ctx),
         };
 
+        // Share the social graph to make it globally accessible
         transfer::share_object(social_graph);
     }
 
-    /// Follow a profile
+    /// Follow a profile by address
     public entry fun follow(
         social_graph: &mut SocialGraph,
-        follower_profile: &Profile,
-        following_id: address,
+        follower_profile_id: address,
+        following_profile_id: address,
         ctx: &mut TxContext
     ) {
-        // Get follower ID
-        let follower_id = object::uid_to_address(profile::id(follower_profile));
+        let sender = tx_context::sender(ctx);
         
         // Cannot follow self
-        assert!(follower_id != following_id, ECannotFollowSelf);
-        
-        // Verify authorization
-        assert!(profile::owner(follower_profile) == tx_context::sender(ctx), EUnauthorized);
+        assert!(follower_profile_id != following_profile_id, ECannotFollowSelf);
         
         // Initialize follower's following set if it doesn't exist
-        if (!table::contains(&social_graph.following, follower_id)) {
-            table::add(&mut social_graph.following, follower_id, vec_set::empty());
+        if (!table::contains(&social_graph.following, follower_profile_id)) {
+            table::add(&mut social_graph.following, follower_profile_id, vec_set::empty());
         };
         
         // Initialize followed's followers set if it doesn't exist
-        if (!table::contains(&social_graph.followers, following_id)) {
-            table::add(&mut social_graph.followers, following_id, vec_set::empty());
+        if (!table::contains(&social_graph.followers, following_profile_id)) {
+            table::add(&mut social_graph.followers, following_profile_id, vec_set::empty());
         };
         
         // Get mutable references to the sets
-        let follower_following = table::borrow_mut(&mut social_graph.following, follower_id);
-        let following_followers = table::borrow_mut(&mut social_graph.followers, following_id);
+        let follower_following = table::borrow_mut(&mut social_graph.following, follower_profile_id);
+        let following_followers = table::borrow_mut(&mut social_graph.followers, following_profile_id);
         
         // Check if already following
-        assert!(!vec_set::contains(follower_following, &following_id), EAlreadyFollowing);
+        assert!(!vec_set::contains(follower_following, &following_profile_id), EAlreadyFollowing);
         
         // Add to sets
-        vec_set::insert(follower_following, following_id);
-        vec_set::insert(following_followers, follower_id);
+        vec_set::insert(follower_following, following_profile_id);
+        vec_set::insert(following_followers, follower_profile_id);
         
         // Emit follow event
         event::emit(FollowEvent {
-            follower: follower_id,
-            following: following_id,
+            follower: follower_profile_id,
+            following: following_profile_id,
         });
     }
 
-    /// Unfollow a profile
+    /// Unfollow a profile by address
     public entry fun unfollow(
         social_graph: &mut SocialGraph,
-        follower_profile: &Profile,
-        following_id: address,
+        follower_profile_id: address,
+        following_profile_id: address,
         ctx: &mut TxContext
     ) {
-        // Get follower ID
-        let follower_id = object::uid_to_address(profile::id(follower_profile));
-        
-        // Verify authorization
-        assert!(profile::owner(follower_profile) == tx_context::sender(ctx), EUnauthorized);
+        let sender = tx_context::sender(ctx);
         
         // Check if following sets exist
-        assert!(table::contains(&social_graph.following, follower_id), ENotFollowing);
-        assert!(table::contains(&social_graph.followers, following_id), ENotFollowing);
+        assert!(table::contains(&social_graph.following, follower_profile_id), ENotFollowing);
+        assert!(table::contains(&social_graph.followers, following_profile_id), ENotFollowing);
         
         // Get mutable references to the sets
-        let follower_following = table::borrow_mut(&mut social_graph.following, follower_id);
-        let following_followers = table::borrow_mut(&mut social_graph.followers, following_id);
+        let follower_following = table::borrow_mut(&mut social_graph.following, follower_profile_id);
+        let following_followers = table::borrow_mut(&mut social_graph.followers, following_profile_id);
         
         // Check if following
-        assert!(vec_set::contains(follower_following, &following_id), ENotFollowing);
+        assert!(vec_set::contains(follower_following, &following_profile_id), ENotFollowing);
         
         // Remove from sets
-        vec_set::remove(follower_following, &following_id);
-        vec_set::remove(following_followers, &follower_id);
+        vec_set::remove(follower_following, &following_profile_id);
+        vec_set::remove(following_followers, &follower_profile_id);
         
         // Emit unfollow event
         event::emit(UnfollowEvent {
-            follower: follower_id,
-            unfollowed: following_id,
+            follower: follower_profile_id,
+            unfollowed: following_profile_id,
         });
     }
 

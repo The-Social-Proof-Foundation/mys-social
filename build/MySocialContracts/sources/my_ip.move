@@ -1,3 +1,8 @@
+// Copyright (c) The Social Proof Foundation LLC
+// SPDX-License-Identifier: Apache-2.0
+
+/// MyIP module for the MySocial network
+/// Manages user-owned intellectual property (IP) objects
 module social_contracts::my_ip {
     use std::string::{Self, String};
     use mys::object::{Self, UID};

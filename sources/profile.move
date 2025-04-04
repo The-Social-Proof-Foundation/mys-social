@@ -1,4 +1,4 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Profile module for the MySocial network
@@ -8,6 +8,7 @@ module social_contracts::profile {
     use std::string::{Self, String};
     use std::vector;
     use std::option::{Self, Option};
+    use std::ascii;
     
     use mys::object::{Self, UID, ID};
     use mys::tx_context::{Self, TxContext};
@@ -33,13 +34,7 @@ module social_contracts::profile {
     const EInsufficientPayment: u64 = 8;
     const EUsernameNotAvailable: u64 = 9;
     const ENotAdmin: u64 = 10;
-    const EProfileMustHaveUsername: u64 = 11;
-
-    /// Name length categories for pricing
-    const NAME_LENGTH_ULTRA_SHORT: u8 = 0;    // 2-4 characters
-    const NAME_LENGTH_SHORT: u8 = 1;          // 5-7 characters
-    const NAME_LENGTH_MEDIUM: u8 = 2;         // 8-12 characters
-    const NAME_LENGTH_LONG: u8 = 3;           // 13+ characters
+    const ENotAuthorizedService: u64 = 12;
     
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -67,14 +62,8 @@ module social_contracts::profile {
         b"sex"
     ];
 
-    /// Duration in seconds
-    const SECONDS_PER_DAY: u64 = 86400;
-    const SECONDS_PER_YEAR: u64 = 31536000;   // 365 days
-
     /// Field names for dynamic fields
     const USERNAME_FIELD: vector<u8> = b"username";
-    const USERNAME_EXPIRY_FIELD: vector<u8> = b"username_expiry";
-    const USERNAME_REGISTERED_AT_FIELD: vector<u8> = b"username_registered_at";
 
     /// Username Registry that stores mappings between usernames and profiles
     public struct UsernameRegistry has key {
@@ -83,14 +72,9 @@ module social_contracts::profile {
         usernames: Table<String, address>,
         // Maps addresses (owners) to their profile IDs
         address_profiles: Table<address, address>,
-        // Admin addresses with special privileges
-        admins: Table<address, bool>,
-        // Creator of the registry (super admin)
-        creator: address,
-        // Treasury to collect registration fees
-        treasury: Balance<MYS>,
     }
 
+    
     /// Profile object that contains user information
     public struct Profile has key, store {
         id: UID,
@@ -102,12 +86,46 @@ module social_contracts::profile {
         profile_picture: Option<Url>,
         /// Cover photo URL
         cover_photo: Option<Url>,
-        /// Email address 
-        email: Option<String>,
-        /// Profile creation timestamp
+        /// Creation timestamp
         created_at: u64,
         /// Profile owner address
         owner: address,
+        /// Birthdate as encrypted string (optional)
+        birthdate: Option<String>,
+        /// Current location as encrypted string (optional)
+        current_location: Option<String>,
+        /// Raised location as encrypted string (optional)
+        raised_location: Option<String>,
+        /// Phone number as encrypted string (optional)
+        phone: Option<String>,
+        /// Email as encrypted string (optional)
+        email: Option<String>,
+        /// Gender as encrypted string (optional)
+        gender: Option<String>,
+        /// Political view as encrypted string (optional)
+        political_view: Option<String>,
+        /// Religion as encrypted string (optional)
+        religion: Option<String>,
+        /// Education as encrypted string (optional)
+        education: Option<String>,
+        /// Website as encrypted string (optional)
+        website: Option<String>,
+        /// Primary language as encrypted string (optional)
+        primary_language: Option<String>,
+        /// Relationship status as encrypted string (optional)
+        relationship_status: Option<String>,
+        /// X/Twitter username as encrypted string (optional)
+        x_username: Option<String>,
+        /// Mastodon username as encrypted string (optional)
+        mastodon_username: Option<String>,
+        /// Facebook username as encrypted string (optional)
+        facebook_username: Option<String>,
+        /// Reddit username as encrypted string (optional)
+        reddit_username: Option<String>,
+        /// GitHub username as encrypted string (optional)
+        github_username: Option<String>,
+        /// Last updated timestamp for profile data
+        last_updated: u64,
     }
 
     // === Events ===
@@ -117,132 +135,52 @@ module social_contracts::profile {
         profile_id: address,
         display_name: String,
         username: Option<String>,
-        has_profile_picture: bool,
-        has_cover_photo: bool,
-        has_email: bool,
+        bio: String,
+        profile_picture: Option<String>,
+        cover_photo: Option<String>,
         owner: address,
+        created_at: u64,
     }
 
-    /// Profile updated event
+    /// Profile updated event with all profile details
     public struct ProfileUpdatedEvent has copy, drop {
         profile_id: address,
         display_name: Option<String>,
         username: Option<String>,
-        has_profile_picture: bool,
-        has_cover_photo: bool,
-        has_email: bool,
+        bio: String,
+        profile_picture: Option<String>,
+        cover_photo: Option<String>,
         owner: address,
-    }
-
-    /// Username updated event
-    public struct UsernameUpdatedEvent has copy, drop {
-        profile_id: address,
-        old_username: String,
-        new_username: String,
-        owner: address,
-    }
-    
-    /// Username registered event
-    public struct UsernameRegisteredEvent has copy, drop {
-        profile_id: address,
-        username: String,
-        owner: address,
-        expires_at: u64,
-        registered_at: u64
-    }
-
-    /// Username transferred event
-    public struct UsernameTransferredEvent has copy, drop {
-        profile_id: address,
-        username: String,
-        old_owner: address,
-        new_owner: address,
-        transferred_at: u64
+        updated_at: u64,
+        // Sensitive fields (all encrypted client-side)
+        birthdate: Option<String>,
+        current_location: Option<String>,
+        raised_location: Option<String>,
+        phone: Option<String>,
+        email: Option<String>,
+        gender: Option<String>,
+        political_view: Option<String>,
+        religion: Option<String>,
+        education: Option<String>,
+        website: Option<String>,
+        primary_language: Option<String>,
+        relationship_status: Option<String>,
+        x_username: Option<String>,
+        mastodon_username: Option<String>,
+        facebook_username: Option<String>,
+        reddit_username: Option<String>,
+        github_username: Option<String>,
     }
 
     /// Module initializer to create the username registry
     fun init(ctx: &mut TxContext) {
-        let registry = create_username_registry(ctx);
-        // Share the registry to make it globally accessible
-        transfer::share_object(registry);
-    }
-
-    // === Core Registry Functions ===
-
-    /// Create a new username registry (normally done by init)
-    fun create_username_registry(ctx: &mut TxContext): UsernameRegistry {
-        let sender = tx_context::sender(ctx);
-        let mut admins = table::new(ctx);
-        // Add creator as admin
-        table::add(&mut admins, sender, true);
-        
-        UsernameRegistry {
+        let registry = UsernameRegistry {
             id: object::new(ctx),
             usernames: table::new(ctx),
             address_profiles: table::new(ctx),
-            admins,
-            creator: sender,
-            treasury: balance::zero(),
-        }
-    }
-
-    /// Check if an address is an admin of the registry
-    public fun is_admin(registry: &UsernameRegistry, addr: address): bool {
-        addr == registry.creator || table::contains(&registry.admins, addr)
-    }
-
-    /// Add an admin to the registry (only callable by existing admins)
-    public entry fun add_admin(
-        registry: &mut UsernameRegistry,
-        new_admin: address,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        // Verify caller is an admin
-        assert!(is_admin(registry, sender), ENotAdmin);
-        
-        // Add new admin if not already one
-        if (!table::contains(&registry.admins, new_admin)) {
-            table::add(&mut registry.admins, new_admin, true);
         };
-    }
-
-    /// Remove an admin from the registry (only callable by creator)
-    public entry fun remove_admin(
-        registry: &mut UsernameRegistry,
-        admin_to_remove: address,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        // Only creator can remove admins
-        assert!(sender == registry.creator, ENotAdmin);
-        
-        // Remove admin if exists
-        if (table::contains(&registry.admins, admin_to_remove)) {
-            table::remove(&mut registry.admins, admin_to_remove);
-        };
-    }
-
-    /// Withdraw funds from the treasury (only callable by admins)
-    public entry fun withdraw_from_treasury(
-        registry: &mut UsernameRegistry,
-        amount: u64,
-        recipient: address,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        // Verify caller is an admin
-        assert!(is_admin(registry, sender), ENotAdmin);
-        
-        // Make sure treasury has enough funds
-        assert!(balance::value(&registry.treasury) >= amount, EInsufficientPayment);
-        
-        // Extract the specified amount
-        let withdraw_balance = balance::split(&mut registry.treasury, amount);
-        
-        // Create a coin from the balance and transfer to recipient
-        let withdraw_coin = coin::from_balance(withdraw_balance, ctx);
-        transfer::public_transfer(withdraw_coin, recipient);
+        // Share the registry to make it globally accessible
+        transfer::share_object(registry);
     }
 
     // === Username Management Functions ===
@@ -282,49 +220,6 @@ module social_contracts::profile {
         false
     }
 
-    /// Calculate price based on name length and duration
-    public fun calculate_price(name_length: u64, duration_epochs: u64): u64 {
-        let length_category = if (name_length <= 4) {
-            NAME_LENGTH_ULTRA_SHORT
-        } else if (name_length <= 7) {
-            NAME_LENGTH_SHORT
-        } else if (name_length <= 12) {
-            NAME_LENGTH_MEDIUM
-        } else {
-            NAME_LENGTH_LONG
-        };
-        
-        // Base price in MYS (significantly reduced to be more affordable)
-        let base_price = if (length_category == NAME_LENGTH_ULTRA_SHORT) {
-            5_000_000_000 // 5 MYSO for ultra short names (reduced from 100)
-        } else if (length_category == NAME_LENGTH_SHORT) {
-            1_000_000_000 // 1 MYSO for short names (reduced from 10)
-        } else if (length_category == NAME_LENGTH_MEDIUM) {
-            500_000_000 // 0.5 MYSO for medium names (reduced from 5)
-        } else {
-            100_000_000 // 0.1 MYSO for long names (reduced from 0.5)
-        };
-        
-        // Apply duration discount
-        // For multi-year registrations, provide a discount
-        let discount_multiplier = if (duration_epochs >= 12) {
-            // 20% discount for 1+ year
-            80
-        } else if (duration_epochs >= 6) {
-            // 10% discount for 6+ months
-            90
-        } else if (duration_epochs >= 3) {
-            // 5% discount for 3+ months
-            95
-        } else {
-            // No discount for short durations
-            100
-        };
-        
-        // Calculate price based on duration with discount
-        (base_price * duration_epochs * discount_multiplier) / 100
-    }
-
     /// Convert a byte vector to lowercase
     fun to_lowercase_bytes(bytes: &vector<u8>): vector<u8> {
         let mut result = vector::empty<u8>();
@@ -348,63 +243,47 @@ module social_contracts::profile {
         b
     }
 
+    /// Convert an ASCII String to a String
+    fun ascii_to_string(ascii_str: ascii::String): String {
+        string::utf8(ascii::into_bytes(ascii_str))
+    }
+
     // === Profile Creation and Management ===
+
 
     /// Create a new profile with a required username
     /// This is the main entry point for new users, combining profile and username creation
-    public entry fun create_profile_with_username(
+    public entry fun create_profile(
         registry: &mut UsernameRegistry,
         display_name: String,
         username: String,
         bio: String,
         profile_picture_url: vector<u8>,
         cover_photo_url: vector<u8>,
-        email: String,
-        payment: &mut Coin<MYS>,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let owner = tx_context::sender(ctx);
         let now = tx_context::epoch(ctx);
+
+        // Check that the sender doesn't already have a profile
+        assert!(!table::contains(&registry.address_profiles, owner), EProfileAlreadyExists);
         
         // Validate the username
         let username_bytes = string::as_bytes(&username);
         let username_length = vector::length(username_bytes);
         
-        // Name length validation - between 2 and 50 characters
+        // Username length validation - between 2 and 50 characters
         assert!(username_length >= 2 && username_length <= 50, EInvalidUsername);
         
-        // Check if name is reserved
+        // Check if username is reserved in the hard coded list
         assert!(!is_reserved_name(&username), EReservedName);
         
         // Check that the username isn't already registered
         assert!(!table::contains(&registry.usernames, username), EUsernameNotAvailable);
         
-        // Check that the sender doesn't already have a profile
-        assert!(!table::contains(&registry.address_profiles, owner), EProfileAlreadyExists);
-        
-        // Use a default 1-year duration (12 epochs)
-        let duration_epochs = 12;
-        
-        // Calculate price for the username
-        let price = calculate_price(username_length, duration_epochs);
-        
-        // Ensure sufficient payment
-        let payment_value = coin::value(payment);
-        assert!(payment_value >= price, EInsufficientPayment);
-        
-        // Deduct payment
-        let payment_balance = coin::balance_mut(payment);
-        let paid_balance = balance::split(payment_balance, price);
-        
-        // Add payment to the registry treasury
-        balance::join(&mut registry.treasury, paid_balance);
-        
         // Get current time
         let now_seconds = clock::timestamp_ms(clock) / 1000; // Convert to seconds
-        
-        // Calculate expiration (now + duration in seconds)
-        let expires_at = now_seconds + (duration_epochs * SECONDS_PER_DAY * 30); // Approximate an epoch as 30 days
         
         // Create the profile object
         let profile_picture = if (vector::length(&profile_picture_url) > 0) {
@@ -415,12 +294,6 @@ module social_contracts::profile {
         
         let cover_photo = if (vector::length(&cover_photo_url) > 0) {
             option::some(url::new_unsafe_from_bytes(cover_photo_url))
-        } else {
-            option::none()
-        };
-        
-        let email_option = if (string::length(&email) > 0) {
-            option::some(email)
         } else {
             option::none()
         };
@@ -437,18 +310,38 @@ module social_contracts::profile {
             bio,
             profile_picture,
             cover_photo,
-            email: email_option,
             created_at: now,
             owner,
+            birthdate: option::none(),
+            current_location: option::none(),
+            raised_location: option::none(),
+            phone: option::none(),
+            email: option::none(),
+            gender: option::none(),
+            political_view: option::none(),
+            religion: option::none(),
+            education: option::none(),
+            website: option::none(),
+            primary_language: option::none(),
+            relationship_status: option::none(),
+            x_username: option::none(),
+            mastodon_username: option::none(),
+            facebook_username: option::none(),
+            reddit_username: option::none(),
+            github_username: option::none(),
+            last_updated: now,
         };
-
+        
         // Get the profile ID
         let profile_id = object::uid_to_address(&profile.id);
         
         // Store the username directly on the profile
+        // We'll create the authorized_services table only when needed (lazy initialization)
+        if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
+            // This should never happen but we check as a safeguard
+            abort EProfileCreateFailed
+        };
         dynamic_field::add(&mut profile.id, USERNAME_FIELD, username);
-        dynamic_field::add(&mut profile.id, USERNAME_EXPIRY_FIELD, expires_at);
-        dynamic_field::add(&mut profile.id, USERNAME_REGISTERED_AT_FIELD, now_seconds);
         
         // Add to registry mappings
         table::add(&mut registry.usernames, username, profile_id);
@@ -462,31 +355,39 @@ module social_contracts::profile {
             string::utf8(b"")
         };
         
+        // Convert URL to String for events
+        let profile_picture_string = if (option::is_some(&profile.profile_picture)) {
+            let url = option::borrow(&profile.profile_picture);
+            option::some(ascii_to_string(url::inner_url(url)))
+        } else {
+            option::none()
+        };
+        
+        // Convert URL to String for events
+        let cover_photo_string = if (option::is_some(&profile.cover_photo)) {
+            let url = option::borrow(&profile.cover_photo);
+            option::some(ascii_to_string(url::inner_url(url)))
+        } else {
+            option::none()
+        };
+        
         // Emit profile creation event
         event::emit(ProfileCreatedEvent {
             profile_id,
             display_name: display_name_value,
             username: option::some(username),
-            has_profile_picture: option::is_some(&profile.profile_picture),
-            has_cover_photo: option::is_some(&profile.cover_photo),
-            has_email: option::is_some(&profile.email),
+            bio: profile.bio,
+            profile_picture: profile_picture_string,
+            cover_photo: cover_photo_string,
             owner,
-        });
-        
-        // Emit username registration event
-        event::emit(UsernameRegisteredEvent {
-            profile_id,
-            username,
-            owner,
-            expires_at,
-            registered_at: now_seconds
+            created_at: tx_context::epoch(ctx),
         });
 
         // Transfer profile to owner
         transfer::transfer(profile, owner);
     }
 
-    /// Transfer a profile with its username to a new owner 
+    /// Transfer a profile to a new owner
     /// The username stays with the profile, and the transfer updates registry mappings
     public entry fun transfer_profile(
         registry: &mut UsernameRegistry,
@@ -498,15 +399,9 @@ module social_contracts::profile {
         
         // Verify sender is the owner
         assert!(profile.owner == sender, EUnauthorized);
-
-        // Verify the profile has a username (it must have one)
-        assert!(dynamic_field::exists_(&profile.id, USERNAME_FIELD), EProfileMustHaveUsername);
         
         // Get the profile ID
         let profile_id = object::uid_to_address(&profile.id);
-        
-        // Get the username
-        let username = *dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD);
         
         // Update registry mappings
         table::remove(&mut registry.address_profiles, sender);
@@ -515,82 +410,90 @@ module social_contracts::profile {
         // Update the profile owner
         profile.owner = new_owner;
         
-        // Get current time
-        let now_seconds = tx_context::epoch(ctx);
-        
-        // Emit username transferred event
-        event::emit(UsernameTransferredEvent {
+        // Emit a comprehensive profile updated event to indicate ownership change
+        event::emit(ProfileUpdatedEvent {
             profile_id,
-            username,
-            old_owner: sender,
-            new_owner,
-            transferred_at: now_seconds
+            display_name: profile.display_name,
+            username: if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
+                option::some(*dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD))
+            } else {
+                option::none()
+            },
+            bio: profile.bio,
+            profile_picture: if (option::is_some(&profile.profile_picture)) {
+                let url = option::borrow(&profile.profile_picture);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            cover_photo: if (option::is_some(&profile.cover_photo)) {
+                let url = option::borrow(&profile.cover_photo);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            owner: new_owner,
+            updated_at: tx_context::epoch(ctx),
+            // Include all sensitive fields
+            birthdate: profile.birthdate,
+            current_location: profile.current_location,
+            raised_location: profile.raised_location,
+            phone: profile.phone,
+            email: profile.email,
+            gender: profile.gender,
+            political_view: profile.political_view,
+            religion: profile.religion,
+            education: profile.education,
+            website: profile.website,
+            primary_language: profile.primary_language,
+            relationship_status: profile.relationship_status,
+            x_username: profile.x_username,
+            mastodon_username: profile.mastodon_username,
+            facebook_username: profile.facebook_username,
+            reddit_username: profile.reddit_username,
+            github_username: profile.github_username,
         });
         
         // Transfer profile to new owner
         transfer::public_transfer(profile, new_owner);
     }
 
-    /// Renew a username for additional time
-    public entry fun renew_username(
-        registry: &mut UsernameRegistry,
-        profile: &mut Profile,
-        duration_epochs: u64, 
-        payment: &mut Coin<MYS>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Verify sender is the owner
-        assert!(profile.owner == sender, EUnauthorized);
-        
-        // Verify duration is valid
-        assert!(duration_epochs > 0, EInvalidUsername);
-        
-        // Verify the profile has a username
-        assert!(dynamic_field::exists_(&profile.id, USERNAME_FIELD), EProfileMustHaveUsername);
-        
-        // Get the username
-        let username = *dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD);
-        let username_length = string::length(&username);
-        
-        // Calculate price for renewal
-        let price = calculate_price(username_length, duration_epochs);
-        
-        // Ensure sufficient payment
-        let payment_value = coin::value(payment);
-        assert!(payment_value >= price, EInsufficientPayment);
-        
-        // Deduct payment
-        let payment_balance = coin::balance_mut(payment);
-        let paid_balance = balance::split(payment_balance, price);
-        
-        // Add payment to the registry treasury
-        balance::join(&mut registry.treasury, paid_balance);
-        
-        // Get current expiration
-        let current_expiry = *dynamic_field::borrow<vector<u8>, u64>(&profile.id, USERNAME_EXPIRY_FIELD);
-        
-        // Calculate new expiration (extend by duration)
-        let new_expiry = current_expiry + (duration_epochs * SECONDS_PER_DAY * 30);
-        
-        // Update expiration
-        *dynamic_field::borrow_mut<vector<u8>, u64>(&mut profile.id, USERNAME_EXPIRY_FIELD) = new_expiry;
-    }
-
-    /// Update profile information, keeping the same username
+    /// Only the profile owner can update profile information
+    /// Authorized services (via authorize_read_service) can only read data, never modify it
     public entry fun update_profile(
         profile: &mut Profile,
+        // Basic profile fields
         new_display_name: String,
         new_bio: String,
         new_profile_picture_url: vector<u8>,
         new_cover_photo_url: vector<u8>,
-        new_email: String,
+        // Sensitive profile fields (all optional)
+        birthdate: Option<String>,
+        current_location: Option<String>,
+        raised_location: Option<String>,
+        phone: Option<String>,
+        email: Option<String>,
+        gender: Option<String>,
+        political_view: Option<String>,
+        religion: Option<String>,
+        education: Option<String>,
+        website: Option<String>,
+        primary_language: Option<String>,
+        relationship_status: Option<String>,
+        x_username: Option<String>,
+        mastodon_username: Option<String>,
+        facebook_username: Option<String>,
+        reddit_username: Option<String>,
+        github_username: Option<String>,
         ctx: &mut TxContext
     ) {
+        // Verify sender is the owner
         assert!(profile.owner == tx_context::sender(ctx), EUnauthorized);
+        
+        // Get current timestamp
+        let now = tx_context::epoch(ctx);
 
+        // Update basic profile information
         // Set display name if provided, otherwise keep existing
         if (string::length(&new_display_name) > 0) {
             profile.display_name = option::some(new_display_name);
@@ -605,10 +508,78 @@ module social_contracts::profile {
         if (vector::length(&new_cover_photo_url) > 0) {
             profile.cover_photo = option::some(url::new_unsafe_from_bytes(new_cover_photo_url));
         };
-        
-        if (string::length(&new_email) > 0) {
-            profile.email = option::some(new_email);
+
+        // Update sensitive profile details if provided
+        if (option::is_some(&birthdate)) {
+            profile.birthdate = birthdate;
         };
+        
+        if (option::is_some(&current_location)) {
+            profile.current_location = current_location;
+        };
+        
+        if (option::is_some(&raised_location)) {
+            profile.raised_location = raised_location;
+        };
+        
+        if (option::is_some(&phone)) {
+            profile.phone = phone;
+        };
+        
+        if (option::is_some(&email)) {
+            profile.email = email;
+        };
+        
+        if (option::is_some(&gender)) {
+            profile.gender = gender;
+        };
+        
+        if (option::is_some(&political_view)) {
+            profile.political_view = political_view;
+        };
+        
+        if (option::is_some(&religion)) {
+            profile.religion = religion;
+        };
+        
+        if (option::is_some(&education)) {
+            profile.education = education;
+        };
+        
+        if (option::is_some(&website)) {
+            profile.website = website;
+        };
+        
+        if (option::is_some(&primary_language)) {
+            profile.primary_language = primary_language;
+        };
+        
+        if (option::is_some(&relationship_status)) {
+            profile.relationship_status = relationship_status;
+        };
+        
+        if (option::is_some(&x_username)) {
+            profile.x_username = x_username;
+        };
+        
+        if (option::is_some(&mastodon_username)) {
+            profile.mastodon_username = mastodon_username;
+        };
+        
+        if (option::is_some(&facebook_username)) {
+            profile.facebook_username = facebook_username;
+        };
+        
+        if (option::is_some(&reddit_username)) {
+            profile.reddit_username = reddit_username;
+        };
+        
+        if (option::is_some(&github_username)) {
+            profile.github_username = github_username;
+        };
+        
+        // Update the last updated timestamp
+        profile.last_updated = now;
 
         // Get current username
         let username_option = if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
@@ -617,123 +588,53 @@ module social_contracts::profile {
             option::none()
         };
 
+        // Convert URL to String for events
+        let profile_picture_string = if (option::is_some(&profile.profile_picture)) {
+            let url = option::borrow(&profile.profile_picture);
+            option::some(ascii_to_string(url::inner_url(url)))
+        } else {
+            option::none()
+        };
+        
+        // Convert URL to String for events
+        let cover_photo_string = if (option::is_some(&profile.cover_photo)) {
+            let url = option::borrow(&profile.cover_photo);
+            option::some(ascii_to_string(url::inner_url(url)))
+        } else {
+            option::none()
+        };
+
+        // Emit comprehensive profile update event with all fields
         event::emit(ProfileUpdatedEvent {
             profile_id: object::uid_to_address(&profile.id),
             display_name: profile.display_name,
             username: username_option,
-            has_profile_picture: option::is_some(&profile.profile_picture),
-            has_cover_photo: option::is_some(&profile.cover_photo),
-            has_email: option::is_some(&profile.email),
+            bio: profile.bio,
+            profile_picture: profile_picture_string,
+            cover_photo: cover_photo_string,
             owner: profile.owner,
+            updated_at: now,
+            // Include all sensitive fields
+            birthdate: profile.birthdate,
+            current_location: profile.current_location,
+            raised_location: profile.raised_location,
+            phone: profile.phone,
+            email: profile.email,
+            gender: profile.gender,
+            political_view: profile.political_view,
+            religion: profile.religion,
+            education: profile.education,
+            website: profile.website,
+            primary_language: profile.primary_language,
+            relationship_status: profile.relationship_status,
+            x_username: profile.x_username,
+            mastodon_username: profile.mastodon_username,
+            facebook_username: profile.facebook_username,
+            reddit_username: profile.reddit_username,
+            github_username: profile.github_username,
         });
     }
     
-    /// Change username of an existing profile (requires payment)
-    public entry fun change_username(
-        registry: &mut UsernameRegistry,
-        profile: &mut Profile,
-        new_username: String,
-        payment: &mut Coin<MYS>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Verify sender is the owner
-        assert!(profile.owner == sender, EUnauthorized);
-        
-        // Verify the profile has a username
-        assert!(dynamic_field::exists_(&profile.id, USERNAME_FIELD), EProfileMustHaveUsername);
-        
-        // Validate the new username
-        let username_bytes = string::as_bytes(&new_username);
-        let username_length = vector::length(username_bytes);
-        
-        // Name length validation - between 2 and 50 characters
-        assert!(username_length >= 2 && username_length <= 50, EInvalidUsername);
-        
-        // Check if name is reserved
-        assert!(!is_reserved_name(&new_username), EReservedName);
-        
-        // Check that the new username isn't already registered
-        assert!(!table::contains(&registry.usernames, new_username), EUsernameNotAvailable);
-        
-        // Use a default 1-year duration (12 epochs)
-        let duration_epochs = 12;
-        
-        // Calculate price for the new username
-        let price = calculate_price(username_length, duration_epochs);
-        
-        // Ensure sufficient payment
-        let payment_value = coin::value(payment);
-        assert!(payment_value >= price, EInsufficientPayment);
-        
-        // Deduct payment
-        let payment_balance = coin::balance_mut(payment);
-        let paid_balance = balance::split(payment_balance, price);
-        
-        // Add payment to the registry treasury
-        balance::join(&mut registry.treasury, paid_balance);
-        
-        // Get current time
-        let now_seconds = clock::timestamp_ms(clock) / 1000; // Convert to seconds
-        
-        // Calculate expiration (now + duration in seconds)
-        let expires_at = now_seconds + (duration_epochs * SECONDS_PER_DAY * 30); // Approximate an epoch as 30 days
-        
-        // Get the profile ID
-        let profile_id = object::uid_to_address(&profile.id);
-        
-        // Get the old username
-        let old_username = *dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD);
-        
-        // Update registry mappings for the old username
-        table::remove(&mut registry.usernames, old_username);
-        
-        // Store the new username on the profile
-        *dynamic_field::borrow_mut<vector<u8>, String>(&mut profile.id, USERNAME_FIELD) = new_username;
-        *dynamic_field::borrow_mut<vector<u8>, u64>(&mut profile.id, USERNAME_EXPIRY_FIELD) = expires_at;
-        *dynamic_field::borrow_mut<vector<u8>, u64>(&mut profile.id, USERNAME_REGISTERED_AT_FIELD) = now_seconds;
-        
-        // Add new mapping to the registry
-        table::add(&mut registry.usernames, new_username, profile_id);
-        
-        // Emit username updated event
-        event::emit(UsernameUpdatedEvent {
-            profile_id,
-            old_username,
-            new_username,
-            owner: profile.owner
-        });
-    }
-
-    /// Admin function to revoke a username
-    public entry fun admin_revoke_username(
-        registry: &mut UsernameRegistry,
-        username: String,
-        reason: String,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Verify sender is an admin
-        assert!(is_admin(registry, sender), ENotAdmin);
-        
-        // Check if username exists
-        assert!(table::contains(&registry.usernames, username), EUsernameNotRegistered);
-        
-        // Get the profile ID for this username
-        let profile_id = *table::borrow(&registry.usernames, username);
-        
-        // Remove from registry
-        table::remove(&mut registry.usernames, username);
-        
-        // Note: In a full implementation, you would also need to update the profile
-        // to remove or replace the username, but since we can't access it directly here,
-        // this function is limited to just removing the registry entry.
-        // The admin would need to do additional steps to fully handle the revocation.
-    }
-
     // === Accessor functions ===
 
     /// Get the display name of a profile
@@ -755,16 +656,6 @@ module social_contracts::profile {
     public fun cover_photo(profile: &Profile): &Option<Url> {
         &profile.cover_photo
     }
-    
-    /// Get the email of a profile
-    public fun email(profile: &Profile): &Option<String> {
-        &profile.email
-    }
-
-    /// Get the creation timestamp of a profile
-    public fun created_at(profile: &Profile): u64 {
-        profile.created_at
-    }
 
     /// Get the owner of a profile
     public fun owner(profile: &Profile): address {
@@ -775,34 +666,16 @@ module social_contracts::profile {
     public fun id(profile: &Profile): &UID {
         &profile.id
     }
-    
-    /// Check if a profile has a username
-    public fun has_username(profile: &Profile): bool {
-        dynamic_field::exists_(&profile.id, USERNAME_FIELD)
+
+    /// Get the last update timestamp for profile data
+    public fun last_updated(profile: &Profile): u64 {
+        profile.last_updated
     }
-    
+
     /// Get the username string for a profile
     public fun username(profile: &Profile): Option<String> {
         if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
             option::some(*dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD))
-        } else {
-            option::none()
-        }
-    }
-    
-    /// Get the username expiration time
-    public fun username_expiry(profile: &Profile): Option<u64> {
-        if (dynamic_field::exists_(&profile.id, USERNAME_EXPIRY_FIELD)) {
-            option::some(*dynamic_field::borrow<vector<u8>, u64>(&profile.id, USERNAME_EXPIRY_FIELD))
-        } else {
-            option::none()
-        }
-    }
-    
-    /// Get the username registration time
-    public fun username_registered_at(profile: &Profile): Option<u64> {
-        if (dynamic_field::exists_(&profile.id, USERNAME_REGISTERED_AT_FIELD)) {
-            option::some(*dynamic_field::borrow<vector<u8>, u64>(&profile.id, USERNAME_REGISTERED_AT_FIELD))
         } else {
             option::none()
         }
@@ -824,5 +697,69 @@ module social_contracts::profile {
         } else {
             option::none()
         }
+    }
+    
+    /// Check if an address is registered in the authorized_services table
+    /// Tests if the address is in the authorized_services table
+    /// Returns false if the address is not authorized or if the authorization table doesn't exist
+    public fun is_authorized_service(profile: &Profile, address: address): bool {
+        if (!dynamic_field::exists_(&profile.id, b"authorized_services")) {
+            return false
+        };
+        
+        let authorized_services = dynamic_field::borrow<vector<u8>, Table<address, String>>(&profile.id, b"authorized_services");
+        table::contains(authorized_services, address)
+    }
+    
+    /// Add an authorized service to a profile, initializing the table if needed
+    /// Only the profile owner can authorize services
+    public entry fun authorize_service(
+        profile: &mut Profile, 
+        service_address: address, 
+        service_name: String, 
+        ctx: &mut TxContext
+    ) {
+        // Verify the sender is the owner - only owner can authorize services
+        let sender = tx_context::sender(ctx);
+        assert!(profile.owner == sender, EUnauthorized);
+        
+        // Verify service address is not the same as owner (would be redundant)
+        assert!(service_address != profile.owner, ENotAuthorizedService);
+        
+        // Create the table if it doesn't exist
+        if (!dynamic_field::exists_(&profile.id, b"authorized_services")) {
+            let authorized_services = table::new<address, String>(ctx);
+            dynamic_field::add(&mut profile.id, b"authorized_services", authorized_services);
+        };
+        
+        // Get the table and add the service
+        let authorized_services = dynamic_field::borrow_mut<vector<u8>, Table<address, String>>(&mut profile.id, b"authorized_services");
+        
+        // Only add if not already in the table
+        if (!table::contains(authorized_services, service_address)) {
+            table::add(authorized_services, service_address, service_name);
+        };
+    }
+    
+    /// Remove an authorized service from a profile
+    public entry fun revoke_authorization(
+        profile: &mut Profile,
+        service_address: address,
+        ctx: &mut TxContext
+    ) {
+        // Verify the sender is the owner - only owner can revoke authorizations
+        let sender = tx_context::sender(ctx);
+        assert!(profile.owner == sender, EUnauthorized);
+        
+        // Check if authorized_services table exists
+        if (!dynamic_field::exists_(&profile.id, b"authorized_services")) {
+            return
+        };
+        
+        // Get the table and remove the service if it exists
+        let authorized_services = dynamic_field::borrow_mut<vector<u8>, Table<address, String>>(&mut profile.id, b"authorized_services");
+        if (table::contains(authorized_services, service_address)) {
+            table::remove(authorized_services, service_address);
+        };
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Block list module for the MySocial network
@@ -36,13 +36,13 @@ module social_contracts::block_list {
     }
 
     /// Block event
-    public struct BlockEvent has copy, drop {
+    public struct BlockProfileEvent has copy, drop {
         blocker: address,
         blocked: address,
     }
 
     /// Unblock event
-    public struct UnblockEvent has copy, drop {
+    public struct UnblockProfileEvent has copy, drop {
         blocker: address,
         unblocked: address,
     }
@@ -90,7 +90,7 @@ module social_contracts::block_list {
         vec_set::insert(&mut block_list.blocked_profiles, blocked_profile_id);
         
         // Emit block event
-        event::emit(BlockEvent {
+        event::emit(BlockProfileEvent {
             blocker: blocker_id,
             blocked: blocked_profile_id,
         });
@@ -117,7 +117,7 @@ module social_contracts::block_list {
         vec_set::remove(&mut block_list.blocked_profiles, &blocked_profile_id);
         
         // Emit unblock event
-        event::emit(UnblockEvent {
+        event::emit(UnblockProfileEvent {
             blocker: blocker_id,
             unblocked: blocked_profile_id,
         });

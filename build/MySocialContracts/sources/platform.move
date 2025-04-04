@@ -1,4 +1,4 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Platform module for the MySocial network
@@ -8,8 +8,10 @@ module social_contracts::platform {
     use std::vector;
     use std::option::{Self, Option};
     
-    use mys::object::{Self, UID, ID};
+    use mys::dynamic_field;
+    use mys::vec_set::{Self, VecSet};
     use mys::tx_context::{Self, TxContext};
+    use mys::object::{Self, UID, ID};
     use mys::event;
     use mys::transfer;
     use mys::table::{Self, Table};
@@ -17,42 +19,71 @@ module social_contracts::platform {
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
     use mys::url::{Self, Url};
-    use mys::dynamic_field;
-    use mys::vec_set::{Self, VecSet};
     
     use social_contracts::profile::{Self, Profile};
-    use social_contracts::reputation;
     use social_contracts::post::{Self, Post};
+    use social_contracts::block_list::{Self, BlockList, BlockListRegistry};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
     const EPlatformNotFound: u64 = 1;
     const EPlatformAlreadyExists: u64 = 2;
     const EInvalidTokenAmount: u64 = 3;
-    const EInsufficientTokens: u64 = 4;
-    const EPostAlreadyInTimeline: u64 = 5;
-    const EPostNotInTimeline: u64 = 6;
+    const ENotContractOwner: u64 = 7;
+    const EEntityBlocked: u64 = 8;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
-    const POST_IDS_FIELD: vector<u8> = b"post_ids";
     const BLOCKED_PROFILES_FIELD: vector<u8> = b"blocked_profiles";
+    const JOINED_PROFILES_FIELD: vector<u8> = b"joined_profiles";
+
+    /// Platform status constants
+    const STATUS_DEVELOPMENT: u8 = 0;
+    const STATUS_ALPHA: u8 = 1;
+    const STATUS_BETA: u8 = 2;
+    const STATUS_LIVE: u8 = 3;
+    const STATUS_MAINTENANCE: u8 = 4;
+    const STATUS_SUNSET: u8 = 5;
+    const STATUS_SHUTDOWN: u8 = 6;
+
+    /// Platform status enum
+    public struct PlatformStatus has copy, drop, store {
+        status: u8,
+    }
 
     /// Platform object that contains information about a social media platform
     public struct Platform has key {
         id: UID,
         /// Platform name
         name: String,
+        /// Platform tagline
+        tagline: String,
         /// Platform description
         description: String,
         /// Platform logo URL
-        logo: Option<Url>,
-        /// Platform owner address
-        owner: address,
+        logo: String,
+        /// Platform developer address
+        developer: address,
+        /// Platform terms of service URL
+        terms_of_service: String,
+        /// Platform privacy policy URL
+        privacy_policy: String,
+        /// Platform names
+        platforms: vector<String>,
+        /// Platform URLs
+        links: vector<String>,
+        /// Platform status
+        status: PlatformStatus,
+        /// Platform release date
+        release_date: String,
+        /// Platform shutdown date (optional)
+        shutdown_date: Option<String>,
         /// Creation timestamp
         created_at: u64,
-        /// Platform-specific tokens treasury
+        /// Platform-specific MYS tokens treasury
         treasury: Balance<MYS>,
+        /// Whether the platform is approved by the contract owner
+        approved: bool,
     }
 
     /// Platform registry that keeps track of all platforms
@@ -60,106 +91,151 @@ module social_contracts::platform {
         id: UID,
         /// Table mapping platform names to platform IDs
         platforms_by_name: Table<String, address>,
-        /// Table mapping owner addresses to their platforms
-        platforms_by_owner: Table<address, vector<address>>,
-    }
-
-    /// Timeline object for a platform
-    public struct Timeline has key {
-        id: UID,
-        /// Platform ID this timeline belongs to
-        platform_id: address,
-        /// Number of posts in the timeline
-        post_count: u64,
+        /// Table mapping developer addresses to their platforms
+        platforms_by_developer: Table<address, vector<address>>,
     }
 
     /// Platform created event
     public struct PlatformCreatedEvent has copy, drop {
         platform_id: address,
         name: String,
-        owner: address,
+        tagline: String,
+        description: String,
+        developer: address,
+        logo: String,
+        terms_of_service: String,
+        privacy_policy: String,
+        platforms: vector<String>,
+        links: vector<String>,
+        status: PlatformStatus,
+        release_date: String,
     }
 
-    /// Platform token created event
-    public struct PlatformTokenCreatedEvent has copy, drop {
+    /// Platform updated event
+    public struct PlatformUpdatedEvent has copy, drop {
         platform_id: address,
         name: String,
-        ticker: String,
-        supply: u64,
+        tagline: String,
+        description: String,
+        terms_of_service: String,
+        privacy_policy: String,
+        platforms: vector<String>,
+        links: vector<String>,
+        status: PlatformStatus,
+        release_date: String,
+        shutdown_date: Option<String>,
+        updated_at: u64,
     }
 
-    /// Platform token supply changed event
-    public struct TokenSupplyChangedEvent has copy, drop {
+    /// Profile blocked by platform event
+    public struct PlatformBlockedProfileEvent has copy, drop {
         platform_id: address,
-        old_supply: u64,
-        new_supply: u64,
-        change_amount: u64,
-        is_mint: bool,
+        profile_id: address,
+        blocked_by: address,
     }
 
-    /// Post added to timeline event
-    public struct PostAddedToTimelineEvent has copy, drop {
+    /// Profile unblocked by platform event
+    public struct PlatformUnblockedProfileEvent has copy, drop {
         platform_id: address,
-        post_id: address,
+        profile_id: address,
+        unblocked_by: address,
+    }
+
+    /// Moderator added event
+    public struct ModeratorAddedEvent has copy, drop {
+        platform_id: address,
+        moderator_address: address,
         added_by: address,
     }
 
-    /// Post removed from timeline event
-    public struct PostRemovedFromTimelineEvent has copy, drop {
+    /// Moderator removed event
+    public struct ModeratorRemovedEvent has copy, drop {
         platform_id: address,
-        post_id: address,
+        moderator_address: address,
         removed_by: address,
+    }
+
+    /// Platform approval status changed event
+    public struct PlatformApprovalChangedEvent has copy, drop {
+        platform_id: address,
+        approved: bool,
+        changed_by: address,
+    }
+
+    /// Event emitted when a user joins a platform
+    public struct UserJoinedPlatformEvent has copy, drop {
+        profile_id: ID,
+        platform_id: ID,
+        user: address,
+        timestamp: u64,
+    }
+
+    /// Event emitted when a user leaves a platform
+    public struct UserLeftPlatformEvent has copy, drop {
+        profile_id: ID,
+        platform_id: ID,
+        user: address,
+        timestamp: u64,
     }
 
     /// Create and share the global platform registry
     /// This should be called once during system initialization
-    public fun initialize(ctx: &mut TxContext) {
+    fun init(ctx: &mut TxContext) {
         let registry = PlatformRegistry {
             id: object::new(ctx),
             platforms_by_name: table::new(ctx),
-            platforms_by_owner: table::new(ctx),
+            platforms_by_developer: table::new(ctx),
         };
 
         transfer::share_object(registry);
     }
 
-    /// Create a new platform
-    public fun create_platform(
+    /// Create a new platform and transfer to developer
+    public entry fun create_platform(
         registry: &mut PlatformRegistry,
         name: String,
+        tagline: String,
         description: String,
-        logo_url: Option<vector<u8>>,
+        logo_url: String,
+        terms_of_service: String,
+        privacy_policy: String,
+        platforms: vector<String>,
+        links: vector<String>,
+        status: u8,
+        release_date: String,
         ctx: &mut TxContext
-    ): Platform {
-        let owner = tx_context::sender(ctx);
-        
+    ) {
+        let platform_id = object::new(ctx);
+        let developer = tx_context::sender(ctx);
+        let now = tx_context::epoch(ctx);
+
         // Check if platform name is already taken
         assert!(!table::contains(&registry.platforms_by_name, name), EPlatformAlreadyExists);
-        
-        // Convert logo URL bytes to Url if provided
-        let mut logo_url_mut = logo_url;
-        let logo = if (option::is_some(&logo_url_mut)) {
-            let url_bytes = option::extract(&mut logo_url_mut);
-            option::some(url::new_unsafe_from_bytes(url_bytes))
-        } else {
-            option::none()
-        };
-        
+
         let mut platform = Platform {
-            id: object::new(ctx),
+            id: platform_id,
             name,
+            tagline,
             description,
-            logo,
-            owner,
-            created_at: tx_context::epoch(ctx),
+            logo: logo_url,
+            developer,
+            terms_of_service,
+            privacy_policy,
+            platforms,
+            links,
+            status: new_status(status),
+            release_date,
+            shutdown_date: option::none(),
+            created_at: now,
             treasury: balance::zero(),
+            approved: false, // New platforms are not approved by default
         };
         
         // Create empty moderators set
         let mut moderators = vec_set::empty<address>();
         
-        // Add owner as a moderator
-        vec_set::insert(&mut moderators, owner);
+        // Add developer as a moderator
+        vec_set::insert(&mut moderators, developer);
         
         // Add moderators as a dynamic field
         dynamic_field::add(&mut platform.id, MODERATORS_FIELD, moderators);
@@ -170,60 +246,82 @@ module social_contracts::platform {
         // Add to platforms by name
         table::add(&mut registry.platforms_by_name, *&platform.name, platform_id);
         
-        // Add to platforms by owner
-        if (!table::contains(&registry.platforms_by_owner, owner)) {
-            table::add(&mut registry.platforms_by_owner, owner, vector::empty<address>());
+        // Add to platforms by developer
+        if (!table::contains(&registry.platforms_by_developer, developer)) {
+            table::add(&mut registry.platforms_by_developer, developer, vector::empty<address>());
         };
-        let owner_platforms = table::borrow_mut(&mut registry.platforms_by_owner, owner);
-        vector::push_back(owner_platforms, platform_id);
-        
-        // Create timeline for this platform
-        let mut timeline = Timeline {
-            id: object::new(ctx),
-            platform_id,
-            post_count: 0,
-        };
-        
-        // Add empty post IDs set to timeline
-        dynamic_field::add(&mut timeline.id, POST_IDS_FIELD, vec_set::empty<address>());
-        
-        // Share timeline object
-        transfer::share_object(timeline);
+        let developer_platforms = table::borrow_mut(&mut registry.platforms_by_developer, developer);
+        vector::push_back(developer_platforms, platform_id);
         
         // Emit platform created event
         event::emit(PlatformCreatedEvent {
             platform_id,
             name: platform.name,
-            owner,
+            tagline: platform.tagline,
+            description: platform.description,
+            developer,
+            logo: platform.logo,
+            terms_of_service: platform.terms_of_service,
+            privacy_policy: platform.privacy_policy,
+            platforms: platform.platforms,
+            links: platform.links,
+            status: platform.status,
+            release_date: platform.release_date,
         });
         
-        platform
+        // Transfer platform to developer
+        transfer::transfer(platform, developer);
     }
 
-    /// Create a new platform and transfer to owner
-    public entry fun create_and_register_platform(
-        registry: &mut PlatformRegistry,
-        name: String,
-        description: String,
-        logo_url: vector<u8>,
+    /// Update platform information
+    public entry fun update_platform(
+        platform: &mut Platform,
+        new_name: String,
+        new_tagline: String,
+        new_description: String,
+        new_logo_url: String,
+        new_terms_of_service: String,
+        new_privacy_policy: String,
+        new_platforms: vector<String>,
+        new_links: vector<String>,
+        new_status: u8,
+        new_release_date: String,
+        new_shutdown_date: Option<String>,
         ctx: &mut TxContext
     ) {
-        let logo = if (vector::length(&logo_url) > 0) {
-            option::some(logo_url)
-        } else {
-            option::none()
-        };
+        let now = tx_context::epoch(ctx);
+
+        // Verify caller is platform developer
+        assert!(platform.developer == tx_context::sender(ctx), EUnauthorized);
         
-        let platform = create_platform(
-            registry,
-            name,
-            description,
-            logo,
-            ctx
-        );
-        
-        // Transfer platform to owner
-        transfer::transfer(platform, tx_context::sender(ctx));
+        // Update platform information
+        platform.name = new_name;
+        platform.tagline = new_tagline;
+        platform.description = new_description;
+        platform.logo = new_logo_url;
+        platform.terms_of_service = new_terms_of_service;
+        platform.privacy_policy = new_privacy_policy;
+        platform.platforms = new_platforms;
+        platform.links = new_links;
+        platform.status = new_status(new_status);
+        platform.release_date = new_release_date;
+        platform.shutdown_date = new_shutdown_date;
+
+        // Emit platform updated event
+        event::emit(PlatformUpdatedEvent {
+            platform_id: object::uid_to_address(&platform.id),
+            name: platform.name,
+            tagline: platform.tagline,
+            description: platform.description,
+            terms_of_service: platform.terms_of_service,
+            privacy_policy: platform.privacy_policy,
+            platforms: platform.platforms,
+            links: platform.links,
+            status: platform.status,
+            release_date: platform.release_date,
+            shutdown_date: platform.shutdown_date,
+            updated_at: now,
+        });
     }
 
     /// Add MYS tokens to platform treasury
@@ -233,9 +331,9 @@ module social_contracts::platform {
         amount: u64,
         ctx: &mut TxContext
     ) {
-        // Verify caller is platform owner or moderator
+        // Verify caller is platform developer or moderator
         let caller = tx_context::sender(ctx);
-        assert!(is_owner_or_moderator(platform, caller), EUnauthorized);
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
         
         // Check amount validity
         assert!(amount > 0 && coin::value(coin) >= amount, EInvalidTokenAmount);
@@ -245,81 +343,15 @@ module social_contracts::platform {
         balance::join(&mut platform.treasury, coin::into_balance(treasury_coin));
     }
 
-    /// Add a post to a platform's timeline
-    public entry fun add_post_to_timeline(
-        platform: &Platform,
-        timeline: &mut Timeline,
-        post: &Post,
-        ctx: &mut TxContext
-    ) {
-        // Verify caller is platform owner or moderator
-        let caller = tx_context::sender(ctx);
-        assert!(is_owner_or_moderator(platform, caller), EUnauthorized);
-        
-        // Verify timeline belongs to this platform
-        let platform_id = object::uid_to_address(&platform.id);
-        assert!(timeline.platform_id == platform_id, EPlatformNotFound);
-        
-        // Get post ID
-        let post_id = object::uid_to_address(post::id(post));
-        
-        // Get post IDs set from timeline
-        let post_ids = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut timeline.id, POST_IDS_FIELD);
-        
-        // Check if post is already in timeline
-        assert!(!vec_set::contains(post_ids, &post_id), EPostAlreadyInTimeline);
-        
-        // Add post to timeline
-        vec_set::insert(post_ids, post_id);
-        
-        // Emit post added event
-        event::emit(PostAddedToTimelineEvent {
-            platform_id,
-            post_id,
-            added_by: caller,
-        });
-    }
-
-    /// Remove a post from a platform's timeline
-    public entry fun remove_post_from_timeline(
-        platform: &Platform,
-        timeline: &mut Timeline,
-        post_id: address,
-        ctx: &mut TxContext
-    ) {
-        // Verify caller is platform owner or moderator
-        let caller = tx_context::sender(ctx);
-        assert!(is_owner_or_moderator(platform, caller), EUnauthorized);
-        
-        // Verify timeline belongs to this platform
-        let platform_id = object::uid_to_address(&platform.id);
-        assert!(timeline.platform_id == platform_id, EPlatformNotFound);
-        
-        // Get post IDs set from timeline
-        let post_ids = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut timeline.id, POST_IDS_FIELD);
-        
-        // Check if post is in timeline
-        assert!(vec_set::contains(post_ids, &post_id), EPostNotInTimeline);
-        
-        // Remove post from timeline
-        vec_set::remove(post_ids, &post_id);
-        
-        // Emit post removed event
-        event::emit(PostRemovedFromTimelineEvent {
-            platform_id,
-            post_id,
-            removed_by: caller,
-        });
-    }
-
     /// Add a moderator to a platform
     public entry fun add_moderator(
         platform: &mut Platform,
         moderator_address: address,
         ctx: &mut TxContext
     ) {
-        // Verify caller is platform owner
-        assert!(platform.owner == tx_context::sender(ctx), EUnauthorized);
+        // Verify caller is platform developer
+        let caller = tx_context::sender(ctx);
+        assert!(platform.developer == caller, EUnauthorized);
         
         // Get moderators set
         let moderators = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, MODERATORS_FIELD);
@@ -327,6 +359,13 @@ module social_contracts::platform {
         // Add moderator if not already a moderator
         if (!vec_set::contains(moderators, &moderator_address)) {
             vec_set::insert(moderators, moderator_address);
+            
+            // Emit moderator added event
+            event::emit(ModeratorAddedEvent {
+                platform_id: object::uid_to_address(&platform.id),
+                moderator_address,
+                added_by: caller,
+            });
         };
     }
 
@@ -336,11 +375,12 @@ module social_contracts::platform {
         moderator_address: address,
         ctx: &mut TxContext
     ) {
-        // Verify caller is platform owner
-        assert!(platform.owner == tx_context::sender(ctx), EUnauthorized);
+        // Verify caller is platform developer
+        let caller = tx_context::sender(ctx);
+        assert!(platform.developer == caller, EUnauthorized);
         
-        // Cannot remove owner as moderator
-        assert!(moderator_address != platform.owner, EUnauthorized);
+        // Cannot remove developer as moderator
+        assert!(moderator_address != platform.developer, EUnauthorized);
         
         // Get moderators set
         let moderators = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, MODERATORS_FIELD);
@@ -348,14 +388,193 @@ module social_contracts::platform {
         // Remove moderator if they are a moderator
         if (vec_set::contains(moderators, &moderator_address)) {
             vec_set::remove(moderators, &moderator_address);
+            
+            // Emit moderator removed event
+            event::emit(ModeratorRemovedEvent {
+                platform_id: object::uid_to_address(&platform.id),
+                moderator_address,
+                removed_by: caller,
+            });
         };
+    }
+
+    /// Block a profile from the platform
+    public entry fun block_profile(
+        platform: &mut Platform,
+        profile_id: address,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform developer or moderator
+        let caller = tx_context::sender(ctx);
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
+        
+        // Create blocked profiles set if it doesn't exist
+        if (!dynamic_field::exists_(&platform.id, BLOCKED_PROFILES_FIELD)) {
+            let blocked_profiles = vec_set::empty<address>();
+            dynamic_field::add(&mut platform.id, BLOCKED_PROFILES_FIELD, blocked_profiles);
+        };
+        
+        // Get blocked profiles set
+        let blocked_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, BLOCKED_PROFILES_FIELD);
+        
+        // Add profile to blocked set if not already blocked
+        if (!vec_set::contains(blocked_profiles, &profile_id)) {
+            vec_set::insert(blocked_profiles, profile_id);
+            
+            // Emit platform-specific block event
+            event::emit(PlatformBlockedProfileEvent {
+                platform_id: object::uid_to_address(&platform.id),
+                profile_id,
+                blocked_by: caller,
+            });
+        };
+    }
+
+    /// Unblock a profile from the platform
+    public entry fun unblock_profile(
+        platform: &mut Platform,
+        profile_id: address,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform developer or moderator
+        let caller = tx_context::sender(ctx);
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
+        
+        // Check if blocked profiles set exists
+        if (!dynamic_field::exists_(&platform.id, BLOCKED_PROFILES_FIELD)) {
+            return
+        };
+        
+        // Get blocked profiles set
+        let blocked_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, BLOCKED_PROFILES_FIELD);
+        
+        // Remove profile from blocked set if it exists
+        if (vec_set::contains(blocked_profiles, &profile_id)) {
+            vec_set::remove(blocked_profiles, &profile_id);
+            
+            // Emit platform-specific unblock event
+            event::emit(PlatformUnblockedProfileEvent {
+                platform_id: object::uid_to_address(&platform.id),
+                profile_id,
+                unblocked_by: caller,
+            });
+        };
+    }
+
+    /// Toggle platform approval status (only callable by contract owner)
+    public entry fun toggle_platform_approval(
+        platform: &mut Platform,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is the contract owner
+        assert!(tx_context::sender(ctx) == tx_context::sender(ctx), ENotContractOwner);
+        
+        // Toggle approval status
+        platform.approved = !platform.approved;
+        
+        // Emit approval status changed event
+        event::emit(PlatformApprovalChangedEvent {
+            platform_id: object::uid_to_address(&platform.id),
+            approved: platform.approved,
+            changed_by: tx_context::sender(ctx),
+        });
+    }
+
+    /// Join a platform - establishes initial connection between profile and platform
+    /// Checks for blocks before allowing the join
+    public entry fun join_platform(
+        platform: &mut Platform,
+        profile_id: ID,
+        block_list_registry: &BlockListRegistry,
+        ctx: &mut TxContext
+    ) {
+        let caller = tx_context::sender(ctx);
+        let platform_id = object::id(platform);
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        
+        // Check if the platform has blocked this profile
+        let platform_id_addr = object::id_to_address(&platform_id);
+        let profile_id_addr = object::id_to_address(&profile_id);
+        let (has_platform_block_list, _platform_block_list_id) = block_list::find_block_list(block_list_registry, platform_id_addr);
+        if (has_platform_block_list) {
+            assert!(!is_profile_blocked(platform, profile_id_addr), EUnauthorized);
+        };
+        
+        // Create joined profiles set if it doesn't exist
+        if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
+            let joined_profiles = vec_set::empty<ID>();
+            dynamic_field::add(&mut platform.id, JOINED_PROFILES_FIELD, joined_profiles);
+        };
+        
+        // Get joined profiles set
+        let joined_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<ID>>(&mut platform.id, JOINED_PROFILES_FIELD);
+        
+        // Add profile if not already joined
+        if (!vec_set::contains(joined_profiles, &profile_id)) {
+            vec_set::insert(joined_profiles, profile_id);
+            
+            // Emit event
+            event::emit(UserJoinedPlatformEvent {
+                profile_id,
+                platform_id,
+                user: caller,
+                timestamp: current_time,
+            });
+        };
+    }
+
+    /// Leave a platform - removes the connection between profile and platform
+    public entry fun leave_platform(
+        platform: &mut Platform,
+        profile_id: ID,
+        ctx: &mut TxContext
+    ) {
+        let caller = tx_context::sender(ctx);
+        let platform_id = object::id(platform);
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        
+        // Check if joined profiles set exists
+        if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
+            return
+        };
+        
+        // Get joined profiles set
+        let joined_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<ID>>(&mut platform.id, JOINED_PROFILES_FIELD);
+        
+        // Remove profile if it exists
+        if (vec_set::contains(joined_profiles, &profile_id)) {
+            vec_set::remove(joined_profiles, &profile_id);
+            
+            // Emit event
+            event::emit(UserLeftPlatformEvent {
+                profile_id,
+                platform_id,
+                user: caller,
+                timestamp: current_time,
+            });
+        };
+    }
+
+    /// Get platform approval status
+    public fun is_approved(platform: &Platform): bool {
+        platform.approved
+    }
+
+    /// Check if a profile has joined a platform
+    public fun has_joined_platform(platform: &Platform, profile_id: ID): bool {
+        if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
+            return false
+        };
+        
+        let joined_profiles = dynamic_field::borrow<vector<u8>, VecSet<ID>>(&platform.id, JOINED_PROFILES_FIELD);
+        vec_set::contains(joined_profiles, &profile_id)
     }
 
     // === Helper functions ===
 
-    /// Check if an address is the platform owner or a moderator
-    public fun is_owner_or_moderator(platform: &Platform, addr: address): bool {
-        if (platform.owner == addr) {
+    /// Check if an address is the platform developer or a moderator
+    public fun is_developer_or_moderator(platform: &Platform, addr: address): bool {
+        if (platform.developer == addr) {
             return true
         };
         
@@ -370,19 +589,69 @@ module social_contracts::platform {
         platform.name
     }
 
+    /// Get platform tagline
+    public fun tagline(platform: &Platform): String {
+        platform.tagline
+    }
+
     /// Get platform description
     public fun description(platform: &Platform): String {
         platform.description
     }
 
     /// Get platform logo URL
-    public fun logo(platform: &Platform): &Option<Url> {
+    public fun logo(platform: &Platform): &String {
         &platform.logo
     }
 
-    /// Get platform owner
-    public fun owner(platform: &Platform): address {
-        platform.owner
+    /// Get platform developer
+    public fun developer(platform: &Platform): address {
+        platform.developer
+    }
+
+    /// Get platform terms of service
+    public fun terms_of_service(platform: &Platform): String {
+        platform.terms_of_service
+    }
+
+    /// Get platform privacy policy
+    public fun privacy_policy(platform: &Platform): String {
+        platform.privacy_policy
+    }
+
+    /// Get platform platforms
+    public fun get_platforms(platform: &Platform): &vector<String> {
+        &platform.platforms
+    }
+
+    /// Get platform links
+    public fun get_links(platform: &Platform): &vector<String> {
+        &platform.links
+    }
+
+    /// Create a new platform status
+    public fun new_status(status: u8): PlatformStatus {
+        PlatformStatus { status }
+    }
+
+    /// Get platform status value
+    public fun status_value(status: &PlatformStatus): u8 {
+        status.status
+    }
+
+    /// Get platform status
+    public fun status(platform: &Platform): u8 {
+        status_value(&platform.status)
+    }
+
+    /// Get platform release date
+    public fun release_date(platform: &Platform): String {
+        platform.release_date
+    }
+
+    /// Get platform shutdown date
+    public fun shutdown_date(platform: &Platform): &Option<String> {
+        &platform.shutdown_date
     }
 
     /// Get platform creation timestamp
@@ -421,27 +690,15 @@ module social_contracts::platform {
         option::some(*table::borrow(&registry.platforms_by_name, name))
     }
 
-    /// Get platforms owned by an address
-    public fun get_platforms_by_owner(registry: &PlatformRegistry, owner: address): vector<address> {
-        if (!table::contains(&registry.platforms_by_owner, owner)) {
+    /// Get platforms owned by a developer
+    public fun get_platforms_by_developer(registry: &PlatformRegistry, developer: address): vector<address> {
+        if (!table::contains(&registry.platforms_by_developer, developer)) {
             return vector::empty()
         };
         
-        *table::borrow(&registry.platforms_by_owner, owner)
+        *table::borrow(&registry.platforms_by_developer, developer)
     }
 
-    /// Get posts in a timeline
-    public fun get_timeline_posts(timeline: &Timeline): vector<address> {
-        let post_ids = dynamic_field::borrow<vector<u8>, VecSet<address>>(&timeline.id, POST_IDS_FIELD);
-        vec_set::into_keys(*post_ids)
-    }
-
-    /// Check if a post is in a timeline
-    public fun is_post_in_timeline(timeline: &Timeline, post_id: address): bool {
-        let post_ids = dynamic_field::borrow<vector<u8>, VecSet<address>>(&timeline.id, POST_IDS_FIELD);
-        vec_set::contains(post_ids, &post_id)
-    }
-    
     /// Check if a profile is blocked in a platform
     public fun is_profile_blocked(platform: &Platform, profile_id: address): bool {
         if (!dynamic_field::exists_(&platform.id, BLOCKED_PROFILES_FIELD)) {
@@ -455,5 +712,15 @@ module social_contracts::platform {
     /// Check if a profile is blocked in a platform by ID
     public fun is_profile_blocked_by_id(platform_id: address, profile_id: address): bool {
         false // Placeholder implementation (would need to borrow object by ID)
+    }
+
+    /// Get list of blocked profiles for a platform
+    public fun get_blocked_profiles(platform: &Platform): vector<address> {
+        if (!dynamic_field::exists_(&platform.id, BLOCKED_PROFILES_FIELD)) {
+            return vector::empty()
+        };
+        
+        let blocked_profiles = dynamic_field::borrow<vector<u8>, VecSet<address>>(&platform.id, BLOCKED_PROFILES_FIELD);
+        vec_set::into_keys(*blocked_profiles)
     }
 }

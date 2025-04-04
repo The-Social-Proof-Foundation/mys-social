@@ -1,3 +1,11 @@
+// Copyright (c) The Social Proof Foundation LLC
+// SPDX-License-Identifier: Apache-2.0
+
+/// Proof of Creativity module for the MySocial network
+/// Manages the creation and verification of proofs of creativity
+/// These proofs are used to verify the originality of content and creative work
+/// They can be linked to intellectual property (IP) assets
+/// and used for various purposes such as monetization, licensing, and verification
 module social_contracts::proof_of_creativity {
     use std::string::{Self, String};
     use std::vector;

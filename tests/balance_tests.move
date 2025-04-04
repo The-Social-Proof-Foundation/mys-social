@@ -1,3 +1,6 @@
+// Copyright (c) The Social Proof Foundation LLC
+// SPDX-License-Identifier: Apache-2.0
+
 #[test_only]
 module mys::balance_tests {
     use mys::balance::{Self, Balance, Supply};

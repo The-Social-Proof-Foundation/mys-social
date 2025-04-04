@@ -1,44 +1,49 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
-module mys::social_graph_tests {
+module social_contracts::social_graph_tests {
+    use std::string;
+    use std::option;
+    use std::vector;
+    
     use mys::test_scenario::{Self, Scenario};
     use mys::test_utils;
-    use mys::profile::{Self, Profile};
-    use mys::social_graph::{Self, SocialGraph};
+    use social_contracts::profile::{Self, Profile, UsernameRegistry};
+    use social_contracts::social_graph::{Self, SocialGraph};
     use mys::tx_context;
     use mys::object::{Self, UID};
     use mys::url::{Self, Url};
-    use std::string::{Self, String};
-    use std::vector;
+    use mys::clock;
+    use mys::transfer;
 
     const TEST_SENDER: address = @0xCAFE;
     const OTHER_USER: address = @0xFACE;
     const THIRD_USER: address = @0xBEEF;
     
     // Helper function to create a profile
-    fun create_test_profile(scenario: &mut Scenario): Profile {
-        let display_name = string::utf8(b"Test User");
-        let bio = string::utf8(b"This is a test bio");
-        let profile_picture = std::option::some(url::new_unsafe_from_bytes(b"https://example.com/profile.jpg"));
+    fun create_test_profile(scenario: &mut Scenario) {
+        let registry = test_scenario::take_shared<UsernameRegistry>(scenario);
+        let clock = test_scenario::take_shared<clock::Clock>(scenario);
         
         profile::create_profile(
-            display_name,
-            bio,
-            profile_picture,
+            &mut registry,
+            string::utf8(b"Test User"),
+            string::utf8(b"testuser"),
+            string::utf8(b"This is a test bio"),
+            b"https://example.com/profile.jpg",
+            b"",
+            &clock,
             test_scenario::ctx(scenario)
-        )
+        );
+        
+        test_scenario::return_shared(registry);
+        test_scenario::return_shared(clock);
     }
     
     #[test]
     fun test_initialize_social_graph() {
         let scenario = test_scenario::begin(TEST_SENDER);
-        
-        // Initialize social graph
-        {
-            social_graph::initialize(test_scenario::ctx(&mut scenario));
-        };
         
         // Verify social graph was created
         test_scenario::next_tx(&mut scenario, TEST_SENDER);
@@ -60,22 +65,26 @@ module mys::social_graph_tests {
     #[test]
     fun test_follow_user() {
         let scenario = test_scenario::begin(TEST_SENDER);
+        {
+            // Create test clock
+            let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            test_scenario::return_shared(clock);
+        };
         
         // Setup: create profile for TEST_SENDER
-        let test_profile = create_test_profile(&mut scenario);
-        mys::transfer::transfer(test_profile, TEST_SENDER);
-        
-        // Initialize social graph
-        test_scenario::next_tx(&mut scenario, TEST_SENDER);
-        {
-            social_graph::initialize(test_scenario::ctx(&mut scenario));
-        };
+        create_test_profile(&mut scenario);
         
         // Create profile for OTHER_USER
         test_scenario::next_tx(&mut scenario, OTHER_USER);
+        create_test_profile(&mut scenario);
+        
+        // Get OTHER_USER profile ID
+        let other_profile_id: address;
+        test_scenario::next_tx(&mut scenario, OTHER_USER);
         {
-            let other_profile = create_test_profile(&mut scenario);
-            mys::transfer::transfer(other_profile, OTHER_USER);
+            let profile = test_scenario::take_from_sender<Profile>(&scenario);
+            other_profile_id = object::uid_to_address(profile::id(&profile));
+            test_scenario::return_to_sender(&scenario, profile);
         };
         
         // TEST_SENDER follows OTHER_USER
@@ -83,11 +92,11 @@ module mys::social_graph_tests {
         {
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
             let social_graph_obj = test_scenario::take_shared<SocialGraph>(&scenario);
-            let other_profile_id = object::id_to_address(&object::new(&mut test_scenario::ctx(&mut scenario)));
+            let profile_id = object::uid_to_address(profile::id(&profile));
             
             social_graph::follow(
                 &mut social_graph_obj,
-                &profile,
+                profile_id,
                 other_profile_id,
                 test_scenario::ctx(&mut scenario)
             );
@@ -116,23 +125,18 @@ module mys::social_graph_tests {
     #[test]
     fun test_unfollow_user() {
         let scenario = test_scenario::begin(TEST_SENDER);
+        {
+            // Create test clock
+            let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            test_scenario::return_shared(clock);
+        };
         
         // Setup: create profile for TEST_SENDER
-        let test_profile = create_test_profile(&mut scenario);
-        mys::transfer::transfer(test_profile, TEST_SENDER);
-        
-        // Initialize social graph
-        test_scenario::next_tx(&mut scenario, TEST_SENDER);
-        {
-            social_graph::initialize(test_scenario::ctx(&mut scenario));
-        };
+        create_test_profile(&mut scenario);
         
         // Create profile for OTHER_USER
         test_scenario::next_tx(&mut scenario, OTHER_USER);
-        {
-            let other_profile = create_test_profile(&mut scenario);
-            mys::transfer::transfer(other_profile, OTHER_USER);
-        };
+        create_test_profile(&mut scenario);
         
         // Get OTHER_USER profile ID
         let other_profile_id: address;
@@ -148,10 +152,11 @@ module mys::social_graph_tests {
         {
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
             let social_graph_obj = test_scenario::take_shared<SocialGraph>(&scenario);
+            let profile_id = object::uid_to_address(profile::id(&profile));
             
             social_graph::follow(
                 &mut social_graph_obj,
-                &profile,
+                profile_id,
                 other_profile_id,
                 test_scenario::ctx(&mut scenario)
             );
@@ -165,10 +170,11 @@ module mys::social_graph_tests {
         {
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
             let social_graph_obj = test_scenario::take_shared<SocialGraph>(&scenario);
+            let profile_id = object::uid_to_address(profile::id(&profile));
             
             social_graph::unfollow(
                 &mut social_graph_obj,
-                &profile,
+                profile_id,
                 other_profile_id,
                 test_scenario::ctx(&mut scenario)
             );
@@ -199,16 +205,14 @@ module mys::social_graph_tests {
     #[expected_failure(abort_code = social_graph::ECannotFollowSelf)]
     fun test_cannot_follow_self() {
         let scenario = test_scenario::begin(TEST_SENDER);
+        {
+            // Create test clock
+            let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            test_scenario::return_shared(clock);
+        };
         
         // Setup: create profile for TEST_SENDER
-        let test_profile = create_test_profile(&mut scenario);
-        mys::transfer::transfer(test_profile, TEST_SENDER);
-        
-        // Initialize social graph
-        test_scenario::next_tx(&mut scenario, TEST_SENDER);
-        {
-            social_graph::initialize(test_scenario::ctx(&mut scenario));
-        };
+        create_test_profile(&mut scenario);
         
         // Get profile ID
         let profile_id: address;
@@ -227,7 +231,7 @@ module mys::social_graph_tests {
             
             social_graph::follow(
                 &mut social_graph_obj,
-                &profile,
+                profile_id,
                 profile_id, // Trying to follow self
                 test_scenario::ctx(&mut scenario)
             );
