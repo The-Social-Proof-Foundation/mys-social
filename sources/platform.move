@@ -23,13 +23,16 @@ module social_contracts::platform {
     
     use social_contracts::profile;
     use social_contracts::post;
-    use social_contracts::block_list::{Self, BlockListRegistry};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
-    const EPlatformAlreadyExists: u64 = 2;
-    const EInvalidTokenAmount: u64 = 3;
+    const EPlatformAlreadyExists: u64 = 1;
+    const EAlreadyBlocked: u64 = 2;
+    const ENotBlocked: u64 = 3;
+    const EInvalidTokenAmount: u64 = 4;
     const ENotContractOwner: u64 = 7;
+    const EAlreadyJoined: u64 = 8;
+    const ENotJoined: u64 = 9;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -416,17 +419,18 @@ module social_contracts::platform {
         // Get blocked profiles set
         let blocked_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, BLOCKED_PROFILES_FIELD);
         
-        // Add profile to blocked set if not already blocked
-        if (!vec_set::contains(blocked_profiles, &profile_id)) {
-            vec_set::insert(blocked_profiles, profile_id);
-            
-            // Emit platform-specific block event
-            event::emit(PlatformBlockedProfileEvent {
-                platform_id: object::uid_to_address(&platform.id),
-                profile_id,
-                blocked_by: caller,
-            });
-        };
+        // Check if already blocked and abort if true
+        assert!(!vec_set::contains(blocked_profiles, &profile_id), EAlreadyBlocked);
+        
+        // Add profile to blocked set
+        vec_set::insert(blocked_profiles, profile_id);
+        
+        // Emit platform-specific block event
+        event::emit(PlatformBlockedProfileEvent {
+            platform_id: object::uid_to_address(&platform.id),
+            profile_id,
+            blocked_by: caller,
+        });
     }
 
     /// Unblock a profile from the platform
@@ -441,23 +445,25 @@ module social_contracts::platform {
         
         // Check if blocked profiles set exists
         if (!dynamic_field::exists_(&platform.id, BLOCKED_PROFILES_FIELD)) {
-            return
+            // Profile can't be blocked if there's no blocked profiles set
+            abort ENotBlocked
         };
         
         // Get blocked profiles set
         let blocked_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, BLOCKED_PROFILES_FIELD);
         
-        // Remove profile from blocked set if it exists
-        if (vec_set::contains(blocked_profiles, &profile_id)) {
-            vec_set::remove(blocked_profiles, &profile_id);
-            
-            // Emit platform-specific unblock event
-            event::emit(PlatformUnblockedProfileEvent {
-                platform_id: object::uid_to_address(&platform.id),
-                profile_id,
-                unblocked_by: caller,
-            });
-        };
+        // Check if profile is actually blocked and abort if not
+        assert!(vec_set::contains(blocked_profiles, &profile_id), ENotBlocked);
+        
+        // Remove profile from blocked set
+        vec_set::remove(blocked_profiles, &profile_id);
+        
+        // Emit platform-specific unblock event
+        event::emit(PlatformUnblockedProfileEvent {
+            platform_id: object::uid_to_address(&platform.id),
+            profile_id,
+            unblocked_by: caller,
+        });
     }
 
     /// Toggle platform approval status (only callable by contract owner)
@@ -480,24 +486,30 @@ module social_contracts::platform {
     }
 
     /// Join a platform - establishes initial connection between profile and platform
-    /// Checks for blocks before allowing the join
+    /// Checks for blocks before allowing the join and verifies platform is approved
+    /// Uses the caller's wallet address to find their profile for security
     public entry fun join_platform(
+        registry: &profile::UsernameRegistry,
         platform: &mut Platform,
-        profile_id: ID,
-        block_list_registry: &BlockListRegistry,
         ctx: &mut TxContext
     ) {
         let caller = tx_context::sender(ctx);
         let platform_id = object::id(platform);
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         
+        // Look up the caller's profile ID from registry
+        let mut caller_profile_id_opt = profile::lookup_profile_by_owner(registry, caller);
+        assert!(option::is_some(&caller_profile_id_opt), EUnauthorized);
+        
+        // Extract profile ID and convert to ID type
+        let profile_id_addr = option::extract(&mut caller_profile_id_opt);
+        let profile_id = object::id_from_address(profile_id_addr);
+        
         // Check if the platform has blocked this profile
-        let platform_id_addr = object::id_to_address(&platform_id);
-        let profile_id_addr = object::id_to_address(&profile_id);
-        let (has_platform_block_list, _platform_block_list_id) = block_list::find_block_list(block_list_registry, platform_id_addr);
-        if (has_platform_block_list) {
-            assert!(!is_profile_blocked(platform, profile_id_addr), EUnauthorized);
-        };
+        assert!(!is_profile_blocked(platform, profile_id_addr), EUnauthorized);
+        
+        // Check if the platform is approved by the contract owner
+        assert!(platform.approved, EUnauthorized);
         
         // Create joined profiles set if it doesn't exist
         if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
@@ -508,50 +520,58 @@ module social_contracts::platform {
         // Get joined profiles set
         let joined_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<ID>>(&mut platform.id, JOINED_PROFILES_FIELD);
         
-        // Add profile if not already joined
-        if (!vec_set::contains(joined_profiles, &profile_id)) {
-            vec_set::insert(joined_profiles, profile_id);
-            
-            // Emit event
-            event::emit(UserJoinedPlatformEvent {
-                profile_id,
-                platform_id,
-                user: caller,
-                timestamp: current_time,
-            });
-        };
+        // Check if profile is already joined to the platform
+        assert!(!vec_set::contains(joined_profiles, &profile_id), EAlreadyJoined);
+        
+        // Add profile to joined profiles
+        vec_set::insert(joined_profiles, profile_id);
+        
+        // Emit event
+        event::emit(UserJoinedPlatformEvent {
+            profile_id,
+            platform_id,
+            user: caller,
+            timestamp: current_time,
+        });
     }
 
     /// Leave a platform - removes the connection between profile and platform
     public entry fun leave_platform(
+        registry: &profile::UsernameRegistry,
         platform: &mut Platform,
-        profile_id: ID,
         ctx: &mut TxContext
     ) {
         let caller = tx_context::sender(ctx);
         let platform_id = object::id(platform);
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         
+        // Look up the caller's profile ID from registry
+        let mut caller_profile_id_opt = profile::lookup_profile_by_owner(registry, caller);
+        assert!(option::is_some(&caller_profile_id_opt), EUnauthorized);
+        
+        // Extract profile ID and convert to ID type
+        let profile_id_addr = option::extract(&mut caller_profile_id_opt);
+        let profile_id = object::id_from_address(profile_id_addr);
+        
         // Check if joined profiles set exists
-        if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
-            return
-        };
+        assert!(dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD), ENotJoined);
         
         // Get joined profiles set
         let joined_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<ID>>(&mut platform.id, JOINED_PROFILES_FIELD);
         
-        // Remove profile if it exists
-        if (vec_set::contains(joined_profiles, &profile_id)) {
-            vec_set::remove(joined_profiles, &profile_id);
-            
-            // Emit event
-            event::emit(UserLeftPlatformEvent {
-                profile_id,
-                platform_id,
-                user: caller,
-                timestamp: current_time,
-            });
-        };
+        // Check if profile is a member of the platform
+        assert!(vec_set::contains(joined_profiles, &profile_id), ENotJoined);
+        
+        // Remove profile from joined profiles
+        vec_set::remove(joined_profiles, &profile_id);
+        
+        // Emit event
+        event::emit(UserLeftPlatformEvent {
+            profile_id,
+            platform_id,
+            user: caller,
+            timestamp: current_time,
+        });
     }
 
     /// Get platform approval status

@@ -28,7 +28,7 @@ flavor = "mys"
 [env]
 
 [env.localnet]
-chain-id = "75dcee60"
-original-published-id = "0xe6fc99e20c4220379248ba990eff25dd3fd25b6f016b01ba4c03863914e86b4c"
-latest-published-id = "0xe6fc99e20c4220379248ba990eff25dd3fd25b6f016b01ba4c03863914e86b4c"
+chain-id = "c2af3025"
+original-published-id = "0x81ca1fc04d4e809ad7c293100ad4f514b18a149372549c2f76eaa88d60ec6a10"
+latest-published-id = "0x81ca1fc04d4e809ad7c293100ad4f514b18a149372549c2f76eaa88d60ec6a10"
 published-version = "1"
