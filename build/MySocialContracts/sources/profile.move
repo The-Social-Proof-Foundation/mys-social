@@ -20,7 +20,6 @@ module social_contracts::profile {
     use mys::coin::{Self, Coin};
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
-    use mys::clock::{Self, Clock};
 
     /// Error codes
     const EProfileAlreadyExists: u64 = 0;
@@ -260,7 +259,6 @@ module social_contracts::profile {
         bio: String,
         profile_picture_url: vector<u8>,
         cover_photo_url: vector<u8>,
-        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let owner = tx_context::sender(ctx);
@@ -281,9 +279,6 @@ module social_contracts::profile {
         
         // Check that the username isn't already registered
         assert!(!table::contains(&registry.usernames, username), EUsernameNotAvailable);
-        
-        // Get current time
-        let now_seconds = clock::timestamp_ms(clock) / 1000; // Convert to seconds
         
         // Create the profile object
         let profile_picture = if (vector::length(&profile_picture_url) > 0) {

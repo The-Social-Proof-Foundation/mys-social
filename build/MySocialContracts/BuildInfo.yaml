@@ -5,15 +5,15 @@ compiled_package_info:
     mys: "0000000000000000000000000000000000000000000000000000000000000002"
     social_contracts: "0000000000000000000000000000000000000000000000000000000000000000"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
-  source_digest: 467B7DA250F6922AD01CB55E1ED832DE2F29D672E27191CB05D7C576476368C9
+  source_digest: CA88B6EFE162BBBAC64130A0BC9188DC863293AC9597B9195013DD057E8E634B
   build_flags:
-    dev_mode: false
-    test_mode: false
+    dev_mode: true
+    test_mode: true
     generate_docs: false
     save_disassembly: false
     install_dir: ~
     force_recompilation: false
-    lock_file: "./Move.lock"
+    lock_file: ~
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: mys
