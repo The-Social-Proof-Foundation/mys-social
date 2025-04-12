@@ -1393,4 +1393,29 @@ module social_contracts::post {
     public fun get_comment_post_id(comment: &Comment): address {
         comment.post_id
     }
+
+    /// Get the ID address of a post
+    public fun get_id_address(post: &Post): address {
+        object::uid_to_address(&post.id)
+    }
+
+    /// Get the owner of a post
+    public fun get_owner(post: &Post): address {
+        post.owner
+    }
+
+    /// Get the reaction count of a post
+    public fun get_reaction_count(post: &Post): u64 {
+        post.reaction_count
+    }
+
+    /// Get the comment count of a post
+    public fun get_comment_count(post: &Post): u64 {
+        post.comment_count
+    }
+
+    /// Get the tips received for a post
+    public fun get_tips_received(post: &Post): u64 {
+        post.tips_received
+    }
 }
