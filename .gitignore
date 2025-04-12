@@ -1,0 +1,35 @@
+# Move build output
+/build/
+build/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Move specific
+*.mv
+
+# Logs and temporary files
+*.log
+/temp
+tmp/
+
+# Rust and potential Cargo artifacts
+target/
+Cargo.lock
+
+# Editor backup files
+*.bak
+*.backup

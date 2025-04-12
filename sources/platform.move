@@ -20,6 +20,7 @@ module social_contracts::platform {
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
     use mys::url;
+    use mys::package::{Self, Publisher};
     
     use social_contracts::profile;
     use social_contracts::post;
@@ -466,13 +467,14 @@ module social_contracts::platform {
         });
     }
 
-    /// Toggle platform approval status (only callable by contract owner)
+    /// Toggle platform approval status (requires Publisher)
     public entry fun toggle_platform_approval(
         platform: &mut Platform,
+        publisher: &Publisher,
         ctx: &mut TxContext
     ) {
-        // Verify caller is the contract owner
-        assert!(tx_context::sender(ctx) == tx_context::sender(ctx), ENotContractOwner);
+        // Verify caller has a valid publisher for this module
+        assert!(package::from_module<Platform>(publisher), ENotContractOwner);
         
         // Toggle approval status
         platform.approved = !platform.approved;

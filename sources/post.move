@@ -16,6 +16,7 @@ module social_contracts::post {
     use mys::coin::{Self, Coin};
     use mys::mys::MYS;
     use mys::url::{Self, Url};
+    use mys::package::{Self, Publisher};
     
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::platform;
@@ -39,10 +40,11 @@ module social_contracts::post {
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
     const MAX_MEDIA_URLS: u64 = 10; // Max 10 media URLs per post
-    const MAX_MENTIONS: u64 = 50; // Max 50 mentions per post
+    const MAX_MENTIONS: u64 = 10; // Max 50 mentions per post
     const MAX_METADATA_SIZE: u64 = 10000; // 10KB max for metadata
     const MAX_DESCRIPTION_LENGTH: u64 = 500; // 500 chars max for report description
     const COMMENTER_TIP_PERCENTAGE: u64 = 80; // 80% of tip goes to commenter, 20% to post owner
+    const REPOST_TIP_PERCENTAGE: u64 = 50; // 50% of tip goes to repost owner, 50% to original post owner
 
     /// Valid post types
     const POST_TYPE_STANDARD: vector<u8> = b"standard";
@@ -705,7 +707,7 @@ module social_contracts::post {
         });
     }
 
-    /// Tip a post with MYS tokens
+    /// Tip a post with MYS tokens (standard post)
     public entry fun tip_post(
         post: &mut Post,
         coin: &mut Coin<MYS>,
@@ -719,6 +721,13 @@ module social_contracts::post {
         
         // Prevent self-tipping
         assert!(tipper != post.owner, ESelfTipping);
+        
+        // Verify this is not a repost or quote repost (those should use tip_repost instead)
+        assert!(
+            string::utf8(POST_TYPE_REPOST) != post.post_type && 
+            string::utf8(POST_TYPE_QUOTE_REPOST) != post.post_type,
+            EInvalidPostType
+        );
         
         // Extract tip amount from tipper's coin
         let tip_coin = coin::split(coin, amount, ctx);
@@ -737,6 +746,90 @@ module social_contracts::post {
             amount,
             is_post: true,
         });
+    }
+    
+    /// Tip a repost with MYS tokens - applies 50/50 split between repost owner and original post owner
+    public entry fun tip_repost(
+        post: &mut Post, // The repost
+        original_post: &mut Post, // The original post
+        coin: &mut Coin<MYS>,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        let tipper = tx_context::sender(ctx);
+        
+        // Check if amount is valid
+        assert!(amount > 0 && coin::value(coin) >= amount, EInvalidTipAmount);
+        
+        // Prevent self-tipping
+        assert!(tipper != post.owner, ESelfTipping);
+        
+        // Verify this is a repost or quote repost
+        assert!(
+            string::utf8(POST_TYPE_REPOST) == post.post_type || 
+            string::utf8(POST_TYPE_QUOTE_REPOST) == post.post_type,
+            EInvalidPostType
+        );
+        
+        // Verify the post has a parent_post_id
+        assert!(option::is_some(&post.parent_post_id), EInvalidParentReference);
+        
+        // Verify the original_post ID matches the parent_post_id
+        let parent_id = *option::borrow(&post.parent_post_id);
+        assert!(parent_id == object::uid_to_address(&original_post.id), EInvalidParentReference);
+        
+        // Skip split if repost owner and original post owner are the same
+        if (post.owner == original_post.owner) {
+            // Standard flow - all goes to the same owner
+            let tip_coin = coin::split(coin, amount, ctx);
+            post.tips_received = post.tips_received + amount;
+            transfer::public_transfer(tip_coin, post.owner);
+            
+            // Emit tip event
+            event::emit(TipEvent {
+                tipper,
+                recipient: post.owner,
+                object_id: object::uid_to_address(&post.id),
+                amount,
+                is_post: true,
+            });
+        } else {
+            // Calculate split - 50/50 between repost owner and original post owner
+            let repost_owner_amount = (amount * REPOST_TIP_PERCENTAGE) / 100;
+            let original_owner_amount = amount - repost_owner_amount;
+            
+            // Extract and split coins
+            let mut tip_coin = coin::split(coin, amount, ctx);
+            let original_owner_coin = coin::split(&mut tip_coin, original_owner_amount, ctx);
+            
+            // Increment the tip counters for tracking purposes
+            post.tips_received = post.tips_received + repost_owner_amount;
+            original_post.tips_received = original_post.tips_received + original_owner_amount;
+            
+            // Transfer the repost owner's share
+            transfer::public_transfer(tip_coin, post.owner);
+            
+            // Transfer the original post owner's share
+            transfer::public_transfer(original_owner_coin, original_post.owner);
+            
+            // Emit tip event for the repost owner
+            event::emit(TipEvent {
+                tipper,
+                recipient: post.owner,
+                object_id: object::uid_to_address(&post.id),
+                amount: repost_owner_amount,
+                is_post: true,
+            });
+            
+            // Emit tip event for the original post owner
+            event::emit(TipEvent {
+                tipper, 
+                recipient: original_post.owner,
+                object_id: object::uid_to_address(&original_post.id),
+                amount: original_owner_amount,
+                is_post: true,
+            });
+        }
     }
 
     /// Tip a comment with MYS tokens
@@ -786,7 +879,7 @@ module social_contracts::post {
         });
     }
 
-    /// Transfer post ownership to another user
+    /// Transfer post ownership to another user (by post owner)
     public entry fun transfer_post_ownership(
         post: &mut Post,
         new_owner: address,
@@ -797,6 +890,36 @@ module social_contracts::post {
         
         // Verify current owner is authorized
         assert!(current_owner == post.owner, EUnauthorizedTransfer);
+        
+        // Look up the profile ID for the new owner (for reference, not ownership)
+        let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, new_owner);
+        assert!(option::is_some(&profile_id_option), EUnauthorized);
+        let new_profile_id = option::extract(&mut profile_id_option);
+        
+        // Update post ownership
+        let previous_owner = post.owner;
+        post.owner = new_owner;
+        post.profile_id = new_profile_id;
+        
+        // Emit ownership transfer event
+        event::emit(OwnershipTransferEvent {
+            object_id: object::uid_to_address(&post.id),
+            previous_owner,
+            new_owner,
+            is_post: true,
+        });
+    }
+
+    /// Admin function to transfer post ownership (requires Publisher)
+    public entry fun admin_transfer_post_ownership(
+        publisher: &Publisher,
+        post: &mut Post,
+        new_owner: address,
+        registry: &social_contracts::profile::UsernameRegistry,
+        ctx: &mut TxContext
+    ) {
+        // Verify the publisher is for this module
+        assert!(package::from_module<Post>(publisher), EUnauthorizedTransfer);
         
         // Look up the profile ID for the new owner (for reference, not ownership)
         let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, new_owner);

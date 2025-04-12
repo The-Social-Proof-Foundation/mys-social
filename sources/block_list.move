@@ -3,36 +3,34 @@
 
 /// Block list module for the MySocial network
 /// Manages user blocking between wallet addresses
+#[allow(duplicate_alias)]
 module social_contracts::block_list {
-    use std::option::{Self, Option};
-    use mys::object::{Self, UID, ID};
-    use mys::tx_context::{Self, TxContext};
-    use mys::event;
+    use mys::object;
+    use mys::tx_context;
     use mys::transfer;
+    use mys::event;
     use mys::table::{Self, Table};
     use mys::vec_set::{Self, VecSet};
-    use mys::dynamic_field::{Self};
+    use mys::dynamic_field;
     
     /// Error codes
-    const EUnauthorized: u64 = 0;
     const EAlreadyBlocked: u64 = 1;
     const ENotBlocked: u64 = 2;
     const ECannotBlockSelf: u64 = 3;
-    const ERegistryNotFound: u64 = 4;
 
     /// Key for storing blocked wallets in the registry
     const BLOCKED_WALLETS_KEY: vector<u8> = b"blocked_wallets";
 
     /// Block list for a user's wallet
     public struct BlockList has key {
-        id: UID,
+        id: object::UID,
         /// The wallet address this block list belongs to
         owner: address,
     }
     
     /// Registry to track all block lists
     public struct BlockListRegistry has key {
-        id: UID,
+        id: object::UID,
         /// Table mapping wallet addresses to block list IDs
         wallet_block_lists: Table<address, address>,
     }
@@ -60,7 +58,7 @@ module social_contracts::block_list {
     }
 
     /// Create a new block list
-    public fun create_block_list(owner: address, ctx: &mut TxContext): BlockList {
+    public fun create_block_list(owner: address, ctx: &mut tx_context::TxContext): BlockList {
         BlockList {
             id: object::new(ctx),
             owner,
@@ -69,7 +67,7 @@ module social_contracts::block_list {
 
     /// Create a new block list for the sender
     /// This is an explicit operation to create a block list, even if not blocking anyone yet
-    public entry fun create_block_list_for_sender(registry: &mut BlockListRegistry, ctx: &mut TxContext) {
+    public entry fun create_block_list_for_sender(registry: &mut BlockListRegistry, ctx: &mut tx_context::TxContext) {
         let sender = tx_context::sender(ctx);
         
         // Check if a block list already exists for the sender
@@ -98,7 +96,7 @@ module social_contracts::block_list {
     }
 
     /// Module initializer to create the block list registry
-    fun init(ctx: &mut TxContext) {
+    fun init(ctx: &mut tx_context::TxContext) {
         let registry = BlockListRegistry {
             id: object::new(ctx),
             wallet_block_lists: table::new(ctx),
@@ -106,6 +104,12 @@ module social_contracts::block_list {
         
         // Share the registry to make it globally accessible
         transfer::share_object(registry);
+    }
+    
+    /// Test-only initializer for the block list registry
+    #[test_only]
+    public fun test_init(ctx: &mut tx_context::TxContext) {
+        init(ctx)
     }
     
     /// Generate a unique key for storing a user's blocked wallets
@@ -121,7 +125,7 @@ module social_contracts::block_list {
     public entry fun block_wallet(
         registry: &mut BlockListRegistry,
         blocked_wallet_address: address,
-        ctx: &mut TxContext
+        ctx: &mut tx_context::TxContext
     ) {
         // Get the sender address (wallet address of the blocker)
         let sender = tx_context::sender(ctx);
@@ -189,7 +193,7 @@ module social_contracts::block_list {
     public entry fun unblock_wallet(
         registry: &mut BlockListRegistry,
         blocked_wallet_address: address,
-        ctx: &mut TxContext
+        ctx: &mut tx_context::TxContext
     ) {
         // Get the sender address (wallet address of the blocker)
         let sender = tx_context::sender(ctx);
@@ -233,7 +237,7 @@ module social_contracts::block_list {
     }
     
     /// Find a block list ID for a wallet address
-    public fun find_block_list_id(registry: &BlockListRegistry, wallet_address: address): Option<address> {
+    public fun find_block_list_id(registry: &BlockListRegistry, wallet_address: address): option::Option<address> {
         if (table::contains(&registry.wallet_block_lists, wallet_address)) {
             option::some(*table::borrow(&registry.wallet_block_lists, wallet_address))
         } else {
