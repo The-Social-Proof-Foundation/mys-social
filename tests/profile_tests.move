@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
-#[allow(unused_const)]
+#[allow(unused_const, duplicate_alias, unused_use)]
 module social_contracts::profile_tests {
     use std::string;
     use std::option;
@@ -12,7 +12,7 @@ module social_contracts::profile_tests {
     use mys::url;
     use mys::coin::{Self, Coin};
     use mys::mys::MYS;
-    use mys::clock;
+    use mys::clock::{Self, Clock};
     use mys::transfer;
     
     const ADMIN: address = @0xAD;
@@ -23,22 +23,23 @@ module social_contracts::profile_tests {
     fun test_create_profile() {
         let mut scenario = test_scenario::begin(ADMIN);
         {
-            // Create test clock
+            // Initialize the UsernameRegistry
+            profile::init_for_testing(test_scenario::ctx(&mut scenario));
+            
+            // Create test clock and share it using the correct approach
             let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            clock::share_for_testing(clock);
             
             // Mint coins for test
             let coins = coin::mint_for_testing<MYS>(20_000_000_000, test_scenario::ctx(&mut scenario));
             transfer::public_transfer(coins, USER1);
-            
-            // Return clock to avoid drop errors
-            test_scenario::return_shared(clock);
         };
         
         // Create a profile
         test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let clock = test_scenario::take_shared<Clock>(&scenario);
             
             // Create profile
             profile::create_profile(
@@ -77,22 +78,23 @@ module social_contracts::profile_tests {
     fun test_update_profile() {
         let mut scenario = test_scenario::begin(ADMIN);
         {
-            // Create test clock
+            // Initialize the UsernameRegistry
+            profile::init_for_testing(test_scenario::ctx(&mut scenario));
+            
+            // Create test clock and share it using the correct approach
             let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            clock::share_for_testing(clock);
             
             // Mint coins for test
             let coins = coin::mint_for_testing<MYS>(20_000_000_000, test_scenario::ctx(&mut scenario));
             transfer::public_transfer(coins, USER1);
-            
-            // Return clock to avoid drop errors
-            test_scenario::return_shared(clock);
         };
         
         // Create a profile
         test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let clock = test_scenario::take_shared<Clock>(&scenario);
             
             // Create profile
             profile::create_profile(
@@ -153,26 +155,27 @@ module social_contracts::profile_tests {
     }
     
     #[test]
-    #[expected_failure(abort_code = profile::EUnauthorized)]
+    #[expected_failure(abort_code = profile::EUnauthorized, location = social_contracts::profile)]
     fun test_unauthorized_update() {
         let mut scenario = test_scenario::begin(ADMIN);
         {
-            // Create test clock
+            // Initialize the UsernameRegistry
+            profile::init_for_testing(test_scenario::ctx(&mut scenario));
+            
+            // Create test clock and share it using the correct approach
             let clock = clock::create_for_testing(test_scenario::ctx(&mut scenario));
+            clock::share_for_testing(clock);
             
             // Mint coins for test
             let coins = coin::mint_for_testing<MYS>(20_000_000_000, test_scenario::ctx(&mut scenario));
             transfer::public_transfer(coins, USER1);
-            
-            // Return clock to avoid drop errors
-            test_scenario::return_shared(clock);
         };
         
         // Create a profile
         test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            let clock = test_scenario::take_shared<clock::Clock>(&scenario);
+            let clock = test_scenario::take_shared<Clock>(&scenario);
             
             // Create profile
             profile::create_profile(

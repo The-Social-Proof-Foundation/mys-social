@@ -744,4 +744,16 @@ module social_contracts::platform {
         let blocked_profiles = dynamic_field::borrow<vector<u8>, VecSet<address>>(&platform.id, BLOCKED_PROFILES_FIELD);
         vec_set::into_keys(*blocked_profiles)
     }
+
+    #[test_only]
+    /// Initialize test environment for platform module
+    public fun test_init(ctx: &mut TxContext) {
+        let registry = PlatformRegistry {
+            id: object::new(ctx),
+            platforms_by_name: table::new(ctx),
+            platforms_by_developer: table::new(ctx),
+        };
+
+        transfer::share_object(registry);
+    }
 }

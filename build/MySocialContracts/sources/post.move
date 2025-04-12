@@ -3,6 +3,7 @@
 
 /// Post module for the MySocial network
 /// Handles creation and management of posts and comments
+#[allow(unused_const, duplicate_alias, unused_use, unused_variable)]
 module social_contracts::post {
     use std::string::{Self, String};
     use std::vector;
@@ -24,8 +25,6 @@ module social_contracts::post {
     /// Error codes
     const EUnauthorized: u64 = 0;
     const EPostNotFound: u64 = 1;
-    const EAlreadyLiked: u64 = 2;
-    const ENotLiked: u64 = 3;
     const EInvalidTipAmount: u64 = 4;
     const ESelfTipping: u64 = 5;
     const EInvalidParentReference: u64 = 6;
@@ -33,9 +32,9 @@ module social_contracts::post {
     const ETooManyMediaUrls: u64 = 8;
     const EInvalidPostType: u64 = 9;
     const EUnauthorizedTransfer: u64 = 10;
-    const ECommentNotFound: u64 = 11;
     const EReportReasonInvalid: u64 = 12;
     const EReportDescriptionTooLong: u64 = 13;
+    const EReactionContentTooLong: u64 = 14;
 
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
@@ -43,12 +42,12 @@ module social_contracts::post {
     const MAX_MENTIONS: u64 = 10; // Max 50 mentions per post
     const MAX_METADATA_SIZE: u64 = 10000; // 10KB max for metadata
     const MAX_DESCRIPTION_LENGTH: u64 = 500; // 500 chars max for report description
+    const MAX_REACTION_LENGTH: u64 = 20; // 50 chars max for a reaction
     const COMMENTER_TIP_PERCENTAGE: u64 = 80; // 80% of tip goes to commenter, 20% to post owner
     const REPOST_TIP_PERCENTAGE: u64 = 50; // 50% of tip goes to repost owner, 50% to original post owner
 
     /// Valid post types
     const POST_TYPE_STANDARD: vector<u8> = b"standard";
-    const POST_TYPE_COMMENT: vector<u8> = b"comment";
     const POST_TYPE_REPOST: vector<u8> = b"repost";
     const POST_TYPE_QUOTE_REPOST: vector<u8> = b"quote_repost";
 
@@ -82,8 +81,8 @@ module social_contracts::post {
         parent_post_id: Option<address>,
         /// Creation timestamp
         created_at: u64,
-        /// Number of likes
-        like_count: u64,
+        /// Total number of reactions
+        reaction_count: u64,
         /// Number of comments
         comment_count: u64,
         /// Number of reposts
@@ -92,6 +91,10 @@ module social_contracts::post {
         tips_received: u64,
         /// Whether the post has been removed from its platform
         removed_from_platform: bool,
+        /// Table of user wallet addresses to their reactions (emoji or text)
+        user_reactions: Table<address, String>,
+        /// Table to count reactions by type
+        reaction_counts: Table<String, u64>,
     }
 
     /// Comment object for posts, supporting nested comments
@@ -115,8 +118,8 @@ module social_contracts::post {
         metadata_json: Option<String>,
         /// Creation timestamp
         created_at: u64,
-        /// Number of likes
-        like_count: u64,
+        /// Total number of reactions
+        reaction_count: u64,
         /// Number of nested comments
         comment_count: u64,
         /// Number of reposts
@@ -125,6 +128,10 @@ module social_contracts::post {
         tips_received: u64,
         /// Whether the comment has been removed from its platform
         removed_from_platform: bool,
+        /// Table of user wallet addresses to their reactions (emoji or text)
+        user_reactions: Table<address, String>,
+        /// Table to count reactions by type
+        reaction_counts: Table<String, u64>,
     }
 
     /// Repost reference
@@ -140,15 +147,6 @@ module social_contracts::post {
         profile_id: address,
         /// Creation timestamp
         created_at: u64,
-    }
-
-    /// Collection of likes for a post or comment
-    public struct Likes has key {
-        id: UID,
-        /// The object ID that these likes belong to (post or comment)
-        object_id: address,
-        /// Table of user wallet addresses that liked this post/comment
-        users: Table<address, bool>,
     }
 
     /// Post created event
@@ -182,17 +180,19 @@ module social_contracts::post {
         profile_id: address,
     }
 
-    /// Like event
-    public struct LikeEvent has copy, drop {
+    /// Reaction event
+    public struct ReactionEvent has copy, drop {
         object_id: address,
         user: address,
+        reaction: String,
         is_post: bool,
     }
 
-    /// Unlike event
-    public struct UnlikeEvent has copy, drop {
+    /// Remove reaction event
+    public struct RemoveReactionEvent has copy, drop {
         object_id: address,
         user: address,
+        reaction: String,
         is_post: bool,
     }
 
@@ -259,6 +259,24 @@ module social_contracts::post {
         reported_at: u64,
     }
 
+    /// Post deleted event
+    public struct PostDeletedEvent has copy, drop {
+        post_id: address,
+        owner: address,
+        profile_id: address,
+        post_type: String,
+        deleted_at: u64,
+    }
+    
+    /// Comment deleted event
+    public struct CommentDeletedEvent has copy, drop {
+        comment_id: address,
+        post_id: address,
+        owner: address,
+        profile_id: address,
+        deleted_at: u64,
+    }
+
     /// Internal function to create a post and return its ID
     fun create_post_internal(
         owner: address,
@@ -282,25 +300,19 @@ module social_contracts::post {
             post_type,
             parent_post_id,
             created_at: tx_context::epoch(ctx),
-            like_count: 0,
+            reaction_count: 0,
             comment_count: 0,
             repost_count: 0,
             tips_received: 0,
             removed_from_platform: false,
+            user_reactions: table::new(ctx),
+            reaction_counts: table::new(ctx),
         };
         
         // Get post ID before sharing
         let post_id = object::uid_to_address(&post.id);
         
-        // Initialize likes collection for this post
-        let likes = Likes {
-            id: object::new(ctx),
-            object_id: post_id,
-            users: table::new(ctx),
-        };
-        
-        // Share objects
-        transfer::share_object(likes);
+        // Share object
         transfer::share_object(post);
         
         // Return the post ID
@@ -309,7 +321,7 @@ module social_contracts::post {
 
     /// Create a new post
     public entry fun create_post(
-        registry: &social_contracts::profile::UsernameRegistry,
+        registry: &UsernameRegistry,
         content: String,
         mut media_urls: Option<vector<vector<u8>>>,
         mentions: Option<vector<address>>,
@@ -408,26 +420,20 @@ module social_contracts::post {
             mentions,
             metadata_json,
             created_at: tx_context::epoch(ctx),
-            like_count: 0,
+            reaction_count: 0,
             comment_count: 0,
             repost_count: 0,
             tips_received: 0,
             removed_from_platform: false,
+            user_reactions: table::new(ctx),
+            reaction_counts: table::new(ctx),
         };
         
         // Get comment ID before sharing
         let comment_id = object::uid_to_address(&comment.id);
         
-        // Initialize likes collection for this comment
-        let likes = Likes {
-            id: object::new(ctx),
-            object_id: comment_id,
-            users: table::new(ctx),
-        };
-        
-        // Share objects
+        // Share object
         transfer::share_object(comment);
-        transfer::share_object(likes);
         
         // Return the comment ID
         comment_id
@@ -435,7 +441,7 @@ module social_contracts::post {
 
     /// Create a comment - unified function for standard comments and nested comments
     public entry fun create_comment(
-        registry: &social_contracts::profile::UsernameRegistry,
+        registry: &UsernameRegistry,
         post: &mut Post,
         parent_comment_id: Option<address>, // Optional: if present, creates a nested comment
         content: String,
@@ -523,7 +529,7 @@ module social_contracts::post {
     /// If content is provided, it's treated as a quote repost
     /// If content is empty/none, it's treated as a standard repost
     public entry fun create_repost(
-        registry: &social_contracts::profile::UsernameRegistry,
+        registry: &UsernameRegistry,
         original_post: &mut Post,
         mut content: Option<String>,
         mut media_urls: Option<vector<vector<u8>>>,
@@ -649,60 +655,183 @@ module social_contracts::post {
         });
     }
 
-    /// Like a post
-    public entry fun like_post(
-        post: &mut Post,
-        likes: &mut Likes,
+    /// Delete a post owned by the caller
+    public entry fun delete_post(
+        post: Post,
         ctx: &mut TxContext
     ) {
-        let user = tx_context::sender(ctx);
-        let post_id = object::uid_to_address(&post.id);
+        let sender = tx_context::sender(ctx);
+        assert!(sender == post.owner, EUnauthorized);
         
-        // Verify likes object matches the post
-        assert!(likes.object_id == post_id, EPostNotFound);
-        
-        // Check if user already liked the post
-        assert!(!table::contains(&likes.users, user), EAlreadyLiked);
-        
-        // Add user to likes table
-        table::add(&mut likes.users, user, true);
-        
-        // Increment post like count
-        post.like_count = post.like_count + 1;
-        
-        // Emit like event
-        event::emit(LikeEvent {
-            object_id: post_id,
-            user,
-            is_post: true,
+        // Emit event for the post deletion
+        event::emit(PostDeletedEvent {
+            post_id: object::uid_to_address(&post.id),
+            owner: post.owner,
+            profile_id: post.profile_id,
+            post_type: post.post_type,
+            deleted_at: tx_context::epoch(ctx)
         });
+        
+        // Extract UID to delete the post object
+        let Post {
+            id,
+            owner: _,
+            profile_id: _,
+            content: _,
+            media: _,
+            mentions: _,
+            metadata_json: _,
+            post_type: _,
+            parent_post_id: _,
+            created_at: _,
+            reaction_count: _,
+            comment_count: _,
+            repost_count: _,
+            tips_received: _,
+            removed_from_platform: _,
+            user_reactions,
+            reaction_counts,
+        } = post;
+        
+        // Clean up associated data structures
+        table::drop(user_reactions);
+        table::drop(reaction_counts);
+        
+        // Delete the post object
+        object::delete(id);
+    }
+    
+    /// Delete a comment owned by the caller
+    public entry fun delete_comment(
+        post: &mut Post,
+        comment: Comment,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == comment.owner, EUnauthorized);
+        
+        // Verify the comment belongs to this post
+        let comment_post_id = comment.post_id;
+        let post_id = object::uid_to_address(&post.id);
+        assert!(comment_post_id == post_id, EPostNotFound);
+        
+        // Decrement the post's comment count
+        post.comment_count = post.comment_count - 1;
+        
+        // Emit event for the comment deletion
+        event::emit(CommentDeletedEvent {
+            comment_id: object::uid_to_address(&comment.id),
+            post_id,
+            owner: comment.owner,
+            profile_id: comment.profile_id,
+            deleted_at: tx_context::epoch(ctx)
+        });
+        
+        // Extract UID to delete the comment object
+        let Comment {
+            id,
+            post_id: _,
+            parent_comment_id: _,
+            owner: _,
+            profile_id: _,
+            content: _,
+            media: _,
+            mentions: _,
+            metadata_json: _,
+            created_at: _,
+            reaction_count: _,
+            comment_count: _,
+            repost_count: _,
+            tips_received: _,
+            removed_from_platform: _,
+            user_reactions,
+            reaction_counts,
+        } = comment;
+        
+        // Clean up associated data structures
+        table::drop(user_reactions);
+        table::drop(reaction_counts);
+        
+        // Delete the comment object
+        object::delete(id);
     }
 
-    /// Unlike a post
-    public entry fun unlike_post(
+    /// React to a post with a specific reaction (emoji or text)
+    /// If the user already has the exact same reaction, it will be removed (toggle behavior)
+    public entry fun react_to_post(
         post: &mut Post,
-        likes: &mut Likes,
+        reaction: String,
         ctx: &mut TxContext
     ) {
         let user = tx_context::sender(ctx);
-        let post_id = object::uid_to_address(&post.id);
         
-        // Verify likes object matches the post
-        assert!(likes.object_id == post_id, EPostNotFound);
+        // Validate reaction length
+        assert!(string::length(&reaction) <= MAX_REACTION_LENGTH, EReactionContentTooLong);
         
-        // Check if user liked the post
-        assert!(table::contains(&likes.users, user), ENotLiked);
+        // Check if user already reacted to the post
+        if (table::contains(&post.user_reactions, user)) {
+            // Get the previous reaction
+            let previous_reaction = *table::borrow(&post.user_reactions, user);
+            
+            // If the reaction is the same, remove it (toggle behavior)
+            if (reaction == previous_reaction) {
+                // Remove user's reaction
+                table::remove(&mut post.user_reactions, user);
+                
+                // Decrease count for this reaction type
+                let count = *table::borrow(&post.reaction_counts, reaction);
+                if (count <= 1) {
+                    table::remove(&mut post.reaction_counts, reaction);
+                } else {
+                    *table::borrow_mut(&mut post.reaction_counts, reaction) = count - 1;
+                };
+                
+                // Decrement post reaction count
+                post.reaction_count = post.reaction_count - 1;
+                
+                // Emit remove reaction event
+                event::emit(RemoveReactionEvent {
+                    object_id: object::uid_to_address(&post.id),
+                    user,
+                    reaction,
+                    is_post: true,
+                });
+                
+                return
+            };
+            
+            // Different reaction, update existing one
+            // Decrease count for previous reaction
+            let previous_count = *table::borrow(&post.reaction_counts, previous_reaction);
+            if (previous_count <= 1) {
+                table::remove(&mut post.reaction_counts, previous_reaction);
+            } else {
+                *table::borrow_mut(&mut post.reaction_counts, previous_reaction) = previous_count - 1;
+            };
+            
+            // Update user's reaction
+            *table::borrow_mut(&mut post.user_reactions, user) = reaction;
+        } else {
+            // New reaction from this user
+            table::add(&mut post.user_reactions, user, reaction);
+            
+            // Increment post reaction count
+            post.reaction_count = post.reaction_count + 1;
+        };
         
-        // Remove user from likes table
-        table::remove(&mut likes.users, user);
+        // Increment count for the reaction
+        if (table::contains(&post.reaction_counts, reaction)) {
+            let count = *table::borrow(&post.reaction_counts, reaction);
+            *table::borrow_mut(&mut post.reaction_counts, reaction) = count + 1;
+        } else {
+            table::add(&mut post.reaction_counts, reaction, 1);
+        };
         
-        // Decrement post like count
-        post.like_count = post.like_count - 1;
-        
-        // Emit unlike event
-        event::emit(UnlikeEvent {
-            object_id: post_id,
+        // Emit reaction event
+        event::emit(ReactionEvent {
+            object_id: object::uid_to_address(&post.id),
             user,
+            reaction,
             is_post: true,
         });
     }
@@ -883,7 +1012,7 @@ module social_contracts::post {
     public entry fun transfer_post_ownership(
         post: &mut Post,
         new_owner: address,
-        registry: &social_contracts::profile::UsernameRegistry,
+        registry: &UsernameRegistry,
         ctx: &mut TxContext
     ) {
         let current_owner = tx_context::sender(ctx);
@@ -915,7 +1044,7 @@ module social_contracts::post {
         publisher: &Publisher,
         post: &mut Post,
         new_owner: address,
-        registry: &social_contracts::profile::UsernameRegistry,
+        registry: &UsernameRegistry,
         ctx: &mut TxContext
     ) {
         // Verify the publisher is for this module
@@ -1155,223 +1284,113 @@ module social_contracts::post {
         });
     }
 
-    /// Like a comment
-    public entry fun like_comment(
+    /// React to a comment with a specific reaction (emoji or text)
+    /// If the user already has the exact same reaction, it will be removed (toggle behavior)
+    public entry fun react_to_comment(
         comment: &mut Comment,
-        likes: &mut Likes,
+        reaction: String,
         ctx: &mut TxContext
     ) {
         let user = tx_context::sender(ctx);
-        let comment_id = object::uid_to_address(&comment.id);
         
-        // Verify likes object matches the comment
-        assert!(likes.object_id == comment_id, ECommentNotFound);
+        // Validate reaction length
+        assert!(string::length(&reaction) <= MAX_REACTION_LENGTH, EReactionContentTooLong);
         
-        // Check if user already liked the comment
-        assert!(!table::contains(&likes.users, user), EAlreadyLiked);
+        // Check if user already reacted to the comment
+        if (table::contains(&comment.user_reactions, user)) {
+            // Get the previous reaction
+            let previous_reaction = *table::borrow(&comment.user_reactions, user);
+            
+            // If the reaction is the same, remove it (toggle behavior)
+            if (reaction == previous_reaction) {
+                // Remove user's reaction
+                table::remove(&mut comment.user_reactions, user);
+                
+                // Decrease count for this reaction type
+                let count = *table::borrow(&comment.reaction_counts, reaction);
+                if (count <= 1) {
+                    table::remove(&mut comment.reaction_counts, reaction);
+                } else {
+                    *table::borrow_mut(&mut comment.reaction_counts, reaction) = count - 1;
+                };
+                
+                // Decrement comment reaction count
+                comment.reaction_count = comment.reaction_count - 1;
+                
+                // Emit remove reaction event
+                event::emit(RemoveReactionEvent {
+                    object_id: object::uid_to_address(&comment.id),
+                    user,
+                    reaction,
+                    is_post: false,
+                });
+                
+                return
+            };
+            
+            // Different reaction, update existing one
+            // Decrease count for previous reaction
+            let previous_count = *table::borrow(&comment.reaction_counts, previous_reaction);
+            if (previous_count <= 1) {
+                table::remove(&mut comment.reaction_counts, previous_reaction);
+            } else {
+                *table::borrow_mut(&mut comment.reaction_counts, previous_reaction) = previous_count - 1;
+            };
+            
+            // Update user's reaction
+            *table::borrow_mut(&mut comment.user_reactions, user) = reaction;
+        } else {
+            // New reaction from this user
+            table::add(&mut comment.user_reactions, user, reaction);
+            
+            // Increment comment reaction count
+            comment.reaction_count = comment.reaction_count + 1;
+        };
         
-        // Add user to likes table
-        table::add(&mut likes.users, user, true);
+        // Increment count for the reaction
+        if (table::contains(&comment.reaction_counts, reaction)) {
+            let count = *table::borrow(&comment.reaction_counts, reaction);
+            *table::borrow_mut(&mut comment.reaction_counts, reaction) = count + 1;
+        } else {
+            table::add(&mut comment.reaction_counts, reaction, 1);
+        };
         
-        // Increment comment like count
-        comment.like_count = comment.like_count + 1;
-        
-        // Emit like event
-        event::emit(LikeEvent {
-            object_id: comment_id,
+        // Emit reaction event
+        event::emit(ReactionEvent {
+            object_id: object::uid_to_address(&comment.id),
             user,
+            reaction,
             is_post: false,
         });
     }
 
-    /// Unlike a comment
-    public entry fun unlike_comment(
-        comment: &mut Comment,
-        likes: &mut Likes,
-        ctx: &mut TxContext
-    ) {
-        let user = tx_context::sender(ctx);
-        let comment_id = object::uid_to_address(&comment.id);
-        
-        // Verify likes object matches the comment
-        assert!(likes.object_id == comment_id, ECommentNotFound);
-        
-        // Check if user liked the comment
-        assert!(table::contains(&likes.users, user), ENotLiked);
-        
-        // Remove user from likes table
-        table::remove(&mut likes.users, user);
-        
-        // Decrement comment like count
-        comment.like_count = comment.like_count - 1;
-        
-        // Emit unlike event
-        event::emit(UnlikeEvent {
-            object_id: comment_id,
-            user,
-            is_post: false,
-        });
-    }
-
-    // === Getters ===
-    
-    /// Get post author (for backward compatibility)
-    public fun author(post: &Post): address {
-        post.profile_id
-    }
-    
-    /// Get post wallet address (for backward compatibility)
-    public fun wallet_address(post: &Post): address {
-        post.owner
-    }
-    
-    /// Get post owner address
-    public fun owner(post: &Post): address {
-        post.owner
-    }
-    
-    /// Get post profile ID
-    public fun profile_id(post: &Post): address {
-        post.profile_id
-    }
-    
     /// Get post content
-    public fun content(post: &Post): String {
+    public fun get_post_content(post: &Post): String {
         post.content
     }
-    
-    /// Get post media URLs
-    public fun media(post: &Post): &Option<vector<Url>> {
-        &post.media
-    }
-    
-    /// Get post mentions
-    public fun mentions(post: &Post): &Option<vector<address>> {
-        &post.mentions
-    }
-    
-    /// Get post metadata
-    public fun metadata_json(post: &Post): Option<String> {
-        // If metadata exists, return a copy, otherwise return none
-        if (option::is_some(&post.metadata_json)) {
-            option::some(*option::borrow(&post.metadata_json))
-        } else {
-            option::none()
-        }
-    }
-    
-    /// Get post type
-    public fun post_type(post: &Post): String {
-        post.post_type
-    }
-    
-    /// Get parent post ID if any
-    public fun parent_post_id(post: &Post): &Option<address> {
-        &post.parent_post_id
-    }
-    
-    /// Get post creation timestamp
-    public fun created_at(post: &Post): u64 {
-        post.created_at
-    }
-    
-    /// Get post ID
-    public fun id(post: &Post): &UID {
-        &post.id
-    }
-    
-    /// Get post like count
-    public fun like_count(post: &Post): u64 {
-        post.like_count
-    }
-    
-    /// Get post comment count
-    public fun comment_count(post: &Post): u64 {
-        post.comment_count
-    }
-    
-    /// Get post repost count
-    public fun repost_count(post: &Post): u64 {
-        post.repost_count
-    }
-    
-    /// Get total tips received by a post
-    public fun tips_received(post: &Post): u64 {
-        post.tips_received
-    }
-    
-    /// Get comment author (for backward compatibility)
-    public fun comment_author(comment: &Comment): address {
-        comment.profile_id
-    }
-    
-    /// Get comment wallet address (for backward compatibility)
-    public fun comment_wallet_address(comment: &Comment): address {
-        comment.owner
-    }
-    
-    /// Get comment owner address
-    public fun comment_owner(comment: &Comment): address {
-        comment.owner
-    }
-    
-    /// Get comment profile ID
-    public fun comment_profile_id(comment: &Comment): address {
-        comment.profile_id
-    }
-    
-    /// Get comment content
-    public fun comment_content(comment: &Comment): String {
-        comment.content
-    }
-    
-    /// Get comment media URLs
-    public fun comment_media(comment: &Comment): &Option<vector<Url>> {
-        &comment.media
-    }
-    
-    /// Get comment mentions
-    public fun comment_mentions(comment: &Comment): &Option<vector<address>> {
-        &comment.mentions
-    }
-    
-    /// Get comment parent ID if any
-    public fun parent_comment_id(comment: &Comment): &Option<address> {
-        &comment.parent_comment_id
-    }
-    
-    /// Get comment creation timestamp
-    public fun comment_created_at(comment: &Comment): u64 {
-        comment.created_at
-    }
-    
-    /// Get comment like count
-    public fun comment_like_count(comment: &Comment): u64 {
-        comment.like_count
-    }
-    
-    /// Get comment repost count
-    public fun comment_repost_count(comment: &Comment): u64 {
-        comment.repost_count
-    }
-    
-    /// Get total tips received by a comment
-    public fun comment_tips_received(comment: &Comment): u64 {
-        comment.tips_received
-    }
-    
-    /// Check if a user has liked a post or comment
-    public fun has_liked(likes: &Likes, user: address): bool {
-        table::contains(&likes.users, user)
+
+    /// Get post owner
+    public fun get_post_owner(post: &Post): address {
+        post.owner
     }
 
-    /// Get comment metadata
-    public fun comment_metadata_json(comment: &Comment): Option<String> {
-        // If metadata exists, return a copy, otherwise return none
-        if (option::is_some(&comment.metadata_json)) {
-            option::some(*option::borrow(&comment.metadata_json))
-        } else {
-            option::none()
-        }
+    /// Get post ID
+    public fun get_post_id(post: &Post): &UID {
+        &post.id
+    }
+
+    /// Get post comment count
+    public fun get_post_comment_count(post: &Post): u64 {
+        post.comment_count
+    }
+
+    /// Get comment owner
+    public fun get_comment_owner(comment: &Comment): address {
+        comment.owner
+    }
+
+    /// Get comment post ID
+    public fun get_comment_post_id(comment: &Comment): address {
+        comment.post_id
     }
 }

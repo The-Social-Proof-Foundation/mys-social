@@ -2,27 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
+#[allow(unused_use, unused_const, duplicate_alias, unused_assignment, dead_code)]
 module social_contracts::post_tests {
     use std::string;
     use std::option;
-    use std::vector;
     
     use mys::test_scenario;
     use mys::tx_context;
-    use mys::coin::{Self};
-    use mys::mys::MYS;
-    use mys::table::{Self, Table};
+    use mys::table;
+    use mys::object;
+    
+    use social_contracts::post::{Self, Post, Comment};
+    use social_contracts::profile::UsernameRegistry;
+    use social_contracts::platform;
     
     // Test constants
     const TEST_CONTENT: vector<u8> = b"This is a test post";
     const USER1: address = @0x1;
     const USER2: address = @0x2;
     const USER3: address = @0x3;
-    const USER4: address = @0x4;
     const PLATFORM_DEVELOPER: address = @0xCAFE;
     const PLATFORM_MODERATOR: address = @0xBEEF;
     const REGULAR_USER: address = @0x5;
-    const TIP_AMOUNT: u64 = 100000000;    // Amount for tip
     
     /// Test basic string operations for post content
     #[test]
@@ -298,5 +299,468 @@ module social_contracts::post_tests {
         // This verifies string equality would work for tests
         let same = string::utf8(b"Original content");
         assert!(content == same, 1);
+    }
+
+    /// Test reactions functionality with toggle behavior
+    #[test]
+    fun test_reactions() {
+        let mut scenario = test_scenario::begin(USER1);
+        
+        // Create a table to track user reactions (simulating what happens in a Post struct)
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let ctx = test_scenario::ctx(&mut scenario);
+            
+            // Initialize reaction tracking tables
+            let mut user_reactions = table::new<address, string::String>(ctx);
+            let mut reaction_counts = table::new<string::String, u64>(ctx);
+            let mut total_reaction_count: u64 = 0;
+            
+            // USER2 adds a reaction "👍"
+            let reaction1 = string::utf8(b"👍");
+            
+            // Initially USER2 has no reaction
+            assert!(!table::contains(&user_reactions, USER2), 0);
+            
+            // Add USER2's reaction
+            table::add(&mut user_reactions, USER2, reaction1);
+            total_reaction_count = total_reaction_count + 1;
+            
+            // Update reaction counts for this emoji
+            table::add(&mut reaction_counts, reaction1, 1);
+            
+            // Verify state after first reaction
+            assert!(table::contains(&user_reactions, USER2), 1);
+            assert!(table::length(&user_reactions) == 1, 2);
+            assert!(total_reaction_count == 1, 3);
+            assert!(*table::borrow(&reaction_counts, reaction1) == 1, 4);
+            
+            // USER3 adds a different reaction "❤️"
+            let reaction2 = string::utf8(b"❤️");
+            
+            // Add USER3's reaction
+            table::add(&mut user_reactions, USER3, reaction2);
+            total_reaction_count = total_reaction_count + 1;
+            
+            // Update reaction counts
+            table::add(&mut reaction_counts, reaction2, 1);
+            
+            // Verify state after second reaction
+            assert!(table::contains(&user_reactions, USER3), 5);
+            assert!(table::length(&user_reactions) == 2, 6);
+            assert!(total_reaction_count == 2, 7);
+            assert!(*table::borrow(&reaction_counts, reaction2) == 1, 8);
+            
+            // USER2 toggles the same reaction (removes it)
+            let user2_reaction = *table::borrow(&user_reactions, USER2);
+            assert!(user2_reaction == reaction1, 9);
+            
+            // Remove USER2's reaction (toggle off)
+            table::remove(&mut user_reactions, USER2);
+            total_reaction_count = total_reaction_count - 1;
+            
+            // Update reaction counts for the removed reaction
+            let count = *table::borrow(&reaction_counts, reaction1);
+            if (count <= 1) {
+                table::remove(&mut reaction_counts, reaction1);
+            } else {
+                *table::borrow_mut(&mut reaction_counts, reaction1) = count - 1;
+            };
+            
+            // Verify state after reaction removal
+            assert!(!table::contains(&user_reactions, USER2), 10);
+            assert!(table::length(&user_reactions) == 1, 11);
+            assert!(total_reaction_count == 1, 12);
+            assert!(!table::contains(&reaction_counts, reaction1), 13);
+            
+            // USER3 changes their reaction from "❤️" to "👍"
+            // First remove old reaction count
+            let user3_reaction = *table::borrow(&user_reactions, USER3);
+            let count = *table::borrow(&reaction_counts, user3_reaction);
+            if (count <= 1) {
+                table::remove(&mut reaction_counts, user3_reaction);
+            } else {
+                *table::borrow_mut(&mut reaction_counts, user3_reaction) = count - 1;
+            };
+            
+            // Then update USER3's reaction
+            *table::borrow_mut(&mut user_reactions, USER3) = reaction1;
+            
+            // And update reaction counts for the new reaction
+            if (table::contains(&reaction_counts, reaction1)) {
+                let count = *table::borrow(&reaction_counts, reaction1);
+                *table::borrow_mut(&mut reaction_counts, reaction1) = count + 1;
+            } else {
+                table::add(&mut reaction_counts, reaction1, 1);
+            };
+            
+            // Verify final state after reaction change
+            assert!(table::contains(&user_reactions, USER3), 14);
+            assert!(*table::borrow(&user_reactions, USER3) == reaction1, 15);
+            assert!(table::length(&user_reactions) == 1, 16);
+            assert!(total_reaction_count == 1, 17);
+            assert!(*table::borrow(&reaction_counts, reaction1) == 1, 18);
+            assert!(!table::contains(&reaction_counts, reaction2), 19);
+            
+            // Cleanup
+            table::drop(user_reactions);
+            table::drop(reaction_counts);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    /// Test delete_post functionality
+    #[test]
+    fun test_delete_post() {
+        let mut scenario = test_scenario::begin(USER1);
+        
+        // Create test objects and registry
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            // Create a registry and platform for testing
+            social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
+        };
+        
+        // USER1 creates a profile
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Register a test username
+            social_contracts::profile::register_username(
+                &mut registry, 
+                string::utf8(b"user1"), 
+                option::none(), 
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 creates a post
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Create a test post
+            post::create_post(
+                &registry,
+                string::utf8(TEST_CONTENT),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 deletes the post they own
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            // Retrieve the post 
+            let post = test_scenario::take_shared<Post>(&scenario);
+            
+            // Verify it has the expected content and owner
+            assert!(post::get_post_content(&post) == string::utf8(TEST_CONTENT), 0);
+            assert!(post::get_post_owner(&post) == USER1, 1);
+            
+            // Delete the post
+            post::delete_post(
+                post, // Note: We pass by value as the post will be consumed
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            // Post should no longer exist in the shared objects
+            assert!(!test_scenario::has_most_recent_shared<Post>(), 2);
+        };
+
+        // Attempt to delete a non-existent post would fail by default
+        // We don't need to test that as it's a runtime error
+        
+        test_scenario::end(scenario);
+    }
+
+    /// Test delete_comment functionality
+    #[test]
+    fun test_delete_comment() {
+        let mut scenario = test_scenario::begin(USER1);
+        
+        // Create test objects and registry
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            // Create a registry and platform for testing
+            social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
+        };
+        
+        // USER1 creates a profile
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Register a test username
+            social_contracts::profile::register_username(
+                &mut registry, 
+                string::utf8(b"user1"), 
+                option::none(), 
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 creates a post
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Create a test post
+            post::create_post(
+                &registry,
+                string::utf8(TEST_CONTENT),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 creates a comment on their own post
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let mut post = test_scenario::take_shared<Post>(&scenario);
+            
+            // Create a comment on the post
+            post::create_comment(
+                &registry,
+                &mut post,
+                option::none(), // No parent comment (top-level comment)
+                string::utf8(b"This is a test comment"),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            // Verify comment count increased
+            assert!(post::get_post_comment_count(&post) == 1, 0);
+            
+            test_scenario::return_shared(post);
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 deletes their comment
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut post = test_scenario::take_shared<Post>(&scenario);
+            let comment = test_scenario::take_shared<Comment>(&scenario);
+            
+            // Verify it's the same post
+            assert!(post::get_post_owner(&post) == USER1, 1);
+            
+            // Verify comment belongs to USER1
+            assert!(post::get_comment_owner(&comment) == USER1, 2);
+            
+            // Get the comment ID to verify it's the right one
+            let comment_post_id = post::get_comment_post_id(&comment);
+            let post_id = object::uid_to_address(post::get_post_id(&post));
+            assert!(comment_post_id == post_id, 3);
+            
+            // Delete the comment
+            post::delete_comment(
+                &mut post,
+                comment, // By value as it will be consumed
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            // Verify post comment count decreased
+            assert!(post::get_post_comment_count(&post) == 0, 4);
+            
+            // Comment should no longer exist in shared objects
+            assert!(!test_scenario::has_most_recent_shared<Comment>(), 5);
+            
+            test_scenario::return_shared(post);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    /// Test unauthorized attempts to delete a post
+    #[test]
+    #[expected_failure(abort_code = 0, location = social_contracts::post)] // EUnauthorized error code
+    fun test_unauthorized_post_deletion() {
+        let mut scenario = test_scenario::begin(USER1);
+        
+        // Create test objects and registry
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            // Create a registry and platform for testing
+            social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
+        };
+        
+        // USER1 creates a profile
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Register a test username
+            social_contracts::profile::register_username(
+                &mut registry, 
+                string::utf8(b"user1"), 
+                option::none(), 
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 creates a post
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Create a test post
+            post::create_post(
+                &registry,
+                string::utf8(TEST_CONTENT),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER2 attempts to delete USER1's post - should fail
+        test_scenario::next_tx(&mut scenario, USER2);
+        {
+            let post = test_scenario::take_shared<Post>(&scenario);
+            
+            // This should fail since USER2 != USER1
+            post::delete_post(post, test_scenario::ctx(&mut scenario));
+            
+            // This line should never be reached due to failure
+            abort 42
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    /// Test unauthorized attempt to delete a comment
+    #[test]
+    #[expected_failure(abort_code = 0, location = social_contracts::post)] // EUnauthorized error code
+    fun test_unauthorized_comment_deletion() {
+        let mut scenario = test_scenario::begin(USER1);
+        
+        // Create test objects and registry
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            // Create a registry and platform for testing
+            social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
+        };
+        
+        // Register profiles for USER1 and USER2
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Register a test username for USER1
+            social_contracts::profile::register_username(
+                &mut registry, 
+                string::utf8(b"user1"), 
+                option::none(), 
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        test_scenario::next_tx(&mut scenario, USER2);
+        {
+            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Register a test username for USER2
+            social_contracts::profile::register_username(
+                &mut registry, 
+                string::utf8(b"user2"), 
+                option::none(), 
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 creates a post
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            
+            // Create a test post
+            post::create_post(
+                &registry,
+                string::utf8(TEST_CONTENT),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER2 creates a comment on USER1's post
+        test_scenario::next_tx(&mut scenario, USER2);
+        {
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let mut post = test_scenario::take_shared<Post>(&scenario);
+            
+            // Create a comment on the post
+            post::create_comment(
+                &registry,
+                &mut post,
+                option::none(), // No parent comment (top-level comment)
+                string::utf8(b"This is a test comment by USER2"),
+                option::none(),
+                option::none(),
+                option::none(),
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            test_scenario::return_shared(post);
+            test_scenario::return_shared(registry);
+        };
+        
+        // USER1 attempts to delete USER2's comment - should fail
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut post = test_scenario::take_shared<Post>(&scenario);
+            let comment = test_scenario::take_shared<Comment>(&scenario);
+            
+            // This should fail since comment owner is USER2, not USER1
+            post::delete_comment(
+                &mut post,
+                comment,
+                test_scenario::ctx(&mut scenario)
+            );
+            
+            // This line should never be reached due to failure
+            abort 42
+        };
+        
+        test_scenario::end(scenario);
     }
 }

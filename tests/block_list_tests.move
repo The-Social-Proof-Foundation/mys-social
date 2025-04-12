@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
+#[allow(unused_use, duplicate_alias, unused_mut_ref)]
 module social_contracts::block_list_tests {
     use std::vector;
     use std::option;
     
     use mys::test_scenario;
-    use mys::tx_context;
     
-    use social_contracts::block_list::{Self, BlockListRegistry};
+    use social_contracts::block_list;
     
     // Test constants
     const USER1: address = @0x1;
@@ -191,7 +191,7 @@ module social_contracts::block_list_tests {
     
     /// Test that users cannot block themselves
     #[test]
-    #[expected_failure(abort_code = block_list::ECannotBlockSelf)]
+    #[expected_failure(abort_code = block_list::ECannotBlockSelf, location = social_contracts::block_list)]
     fun test_cannot_block_self() {
         let mut scenario = test_scenario::begin(ADMIN);
         
@@ -219,7 +219,7 @@ module social_contracts::block_list_tests {
     
     /// Test that users cannot block the same user twice
     #[test]
-    #[expected_failure(abort_code = block_list::EAlreadyBlocked)]
+    #[expected_failure(abort_code = block_list::EAlreadyBlocked, location = social_contracts::block_list)]
     fun test_already_blocked() {
         let mut scenario = test_scenario::begin(ADMIN);
         
@@ -255,7 +255,7 @@ module social_contracts::block_list_tests {
     
     /// Test that users cannot unblock users who aren't blocked
     #[test]
-    #[expected_failure(abort_code = block_list::ENotBlocked)]
+    #[expected_failure(abort_code = block_list::ENotBlocked, location = social_contracts::block_list)]
     fun test_not_blocked() {
         let mut scenario = test_scenario::begin(ADMIN);
         

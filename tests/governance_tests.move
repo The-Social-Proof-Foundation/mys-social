@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
+#[allow(unused_const, duplicate_alias, unused_use, unused_assignment, unused_let_mut)]
 module social_contracts::governance_tests {
     use std::string;
     use std::option;
@@ -19,8 +20,6 @@ module social_contracts::governance_tests {
     const USER1: address = @0x1;
     const USER2: address = @0x2;
     const USER3: address = @0x3;
-    const USER4: address = @0x4;
-    const USER5: address = @0x5;
     const MIN_VOTING_DELAY: u64 = 1000;
     const MIN_VOTING_PERIOD: u64 = 5000;
     const QUORUM_VOTES_PERCENT: u64 = 40; // 40%
@@ -456,7 +455,7 @@ module social_contracts::governance_tests {
             
             // Simulate proposal creation
             let status = 1; // STATUS_DELEGATE_REVIEW
-            let mut staked_amount = STAKE_AMOUNT;
+            let staked_amount = STAKE_AMOUNT;
             
             // Verify proposal initial state
             assert!(submitter == USER1, 0);

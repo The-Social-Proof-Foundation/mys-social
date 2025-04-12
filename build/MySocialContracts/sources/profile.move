@@ -3,23 +3,20 @@
 
 /// Profile module for the MySocial network
 /// Handles user identity, profile creation, management, and username registration
-#[allow(unused_const, duplicate_alias)]
+#[allow(unused_const, duplicate_alias, unused_use, unused_variable, implicit_const_copy, unused_let_mut)]
 module social_contracts::profile {
     use std::string::{Self, String};
     use std::vector;
     use std::option::{Self, Option};
     use std::ascii;
     
-    use mys::object::{Self, UID, ID};
+    use mys::object::{Self, UID};
     use mys::tx_context::{Self, TxContext};
     use mys::event;
-    use mys::transfer::{Self, public_transfer};
+    use mys::transfer;
     use mys::url::{Self, Url};
     use mys::dynamic_field;
     use mys::table::{Self, Table};
-    use mys::coin::{Self, Coin};
-    use mys::balance::{Self, Balance};
-    use mys::mys::MYS;
 
     /// Error codes
     const EProfileAlreadyExists: u64 = 0;
@@ -190,11 +187,13 @@ module social_contracts::profile {
         let name_bytes = string::as_bytes(name);
         let lowercase_name = to_lowercase_bytes(name_bytes);
         
-        let mut i = 0;
-        let reserved_count = vector::length(&RESERVED_NAMES);
+        // Make a local copy of RESERVED_NAMES to avoid implicit copies
+        let reserved_names = RESERVED_NAMES;
+        let reserved_count = vector::length(&reserved_names);
         
+        let mut i = 0;
         while (i < reserved_count) {
-            let reserved = *vector::borrow(&RESERVED_NAMES, i);
+            let reserved = *vector::borrow(&reserved_names, i);
             
             // Exact match with reserved name (case-insensitive)
             if (vector::length(&lowercase_name) == vector::length(&reserved)) {
@@ -756,5 +755,77 @@ module social_contracts::profile {
         if (table::contains(authorized_services, service_address)) {
             table::remove(authorized_services, service_address);
         };
+    }
+
+    #[test_only]
+    /// Initialize test environment for profile module
+    public fun test_init(ctx: &mut TxContext) {
+        let registry = UsernameRegistry {
+            id: object::new(ctx),
+            usernames: table::new(ctx),
+            address_profiles: table::new(ctx),
+        };
+        
+        transfer::share_object(registry);
+    }
+
+    #[test_only]
+    /// Initialize the profile registry for testing
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx)
+    }
+
+    #[test_only]
+    /// Register a test username for testing
+    public fun register_username(
+        registry: &mut UsernameRegistry,
+        username: String,
+        display_name: Option<String>,
+        _profile_picture: Option<String>,
+        ctx: &mut TxContext
+    ) {
+        let owner = tx_context::sender(ctx);
+        let epoch = tx_context::epoch(ctx);
+        
+        // Create a profile with a proper ID
+        let profile = Profile {
+            id: object::new(ctx),
+            display_name,
+            bio: string::utf8(b"Test bio"),
+            profile_picture: option::none(),
+            cover_photo: option::none(),
+            created_at: epoch,
+            owner,
+            birthdate: option::none(),
+            current_location: option::none(),
+            raised_location: option::none(),
+            phone: option::none(),
+            email: option::none(),
+            gender: option::none(),
+            political_view: option::none(),
+            religion: option::none(),
+            education: option::none(),
+            website: option::none(),
+            primary_language: option::none(),
+            relationship_status: option::none(),
+            x_username: option::none(),
+            mastodon_username: option::none(),
+            facebook_username: option::none(),
+            reddit_username: option::none(),
+            github_username: option::none(),
+            last_updated: epoch,
+        };
+        
+        // Get the profile ID and use it for registration
+        let profile_id = object::uid_to_address(&profile.id);
+        
+        // Register the username
+        table::add(&mut registry.usernames, username, profile_id);
+        
+        // Map owner to profile
+        table::add(&mut registry.address_profiles, owner, profile_id);
+        
+        // Share the profile
+        transfer::share_object(profile);
     }
 }
