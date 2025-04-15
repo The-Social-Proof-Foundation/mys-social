@@ -2,18 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// Module to manage package upgrades for MySocialContracts.
-/// 
+/// Provides versioning support for all shared objects.
 #[allow(duplicate_alias)]
 module social_contracts::upgrade {
     use std::vector;
-    use mys::object;
+    use std::string::String;
+    use mys::object::{Self, ID};
     use mys::package;
     use mys::transfer;
     use mys::tx_context;
     use mys::event;
-
+    
     // Error codes
     const EInvalidDigest: u64 = 0;
+    const EWrongVersion: u64 = 1;
+
+    // Current package version - increment with each upgrade
+    const CURRENT_VERSION: u64 = 1;
+
+    // Object type constants removed to avoid dependencies
 
     /// Admin capability for package upgrades
     public struct AdminCap has key, store {
@@ -24,6 +31,15 @@ module social_contracts::upgrade {
     public struct UpgradeEvent has copy, drop {
         package_id: object::ID,
         version: u64
+    }
+
+    /// Event emitted when a shared object is migrated to a new version
+    public struct ObjectMigratedEvent has copy, drop {
+        object_id: ID,
+        object_type: String,
+        old_version: u64,
+        new_version: u64,
+        migrated_by: address
     }
 
     /// Module initializer - runs once when the package is published
@@ -83,6 +99,33 @@ module social_contracts::upgrade {
         cap.package()
     }
 
+    /// Get the current package version constant
+    public fun current_version(): u64 {
+        CURRENT_VERSION
+    }
+
+    /// Check if the version matches the current package version
+    public fun assert_version(version: u64) {
+        assert!(version == CURRENT_VERSION, EWrongVersion);
+    }
+
+    /// Helper function to emit migration event
+    /// This can be called directly by other modules implementing their own migration
+    public fun emit_migration_event(
+        object_id: ID,
+        object_type: String,
+        old_version: u64,
+        migrated_by: address
+    ) {
+        event::emit(ObjectMigratedEvent {
+            object_id,
+            object_type,
+            old_version,
+            new_version: CURRENT_VERSION,
+            migrated_by
+        });
+    }
+    
     // Test utilities
     #[test_only]
     public fun create_test_digest(bytes: vector<u8>): vector<u8> {

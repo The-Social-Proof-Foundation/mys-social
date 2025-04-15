@@ -21,9 +21,9 @@ module social_contracts::governance {
     use mys::coin::{Self, Coin};
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
-    use mys::url;
     use mys::package::{Self, Publisher};
     
+    use social_contracts::upgrade::{Self, AdminCap};
     use social_contracts::profile;
     use social_contracts::post;
     use social_contracts::platform;
@@ -47,6 +47,7 @@ module social_contracts::governance {
     const EInvalidVoteCount: u64 = 17;
     const EInvalidRegistry: u64 = 18;
     const EAlreadyNominated: u64 = 19;
+    const EWrongVersion: u64 = 11;
 
     /// Proposal type constants
     const PROPOSAL_TYPE_ECOSYSTEM: u8 = 0;
@@ -94,6 +95,7 @@ module social_contracts::governance {
         delegate_addresses: VecSet<address>,
         nominee_addresses: VecSet<address>,
         voters: Table<address, Table<address, bool>>, // target -> (voter -> upvote)
+        version: u64,
     }
 
     /// Delegate struct representing a member of the delegate council
@@ -278,6 +280,7 @@ module social_contracts::governance {
             delegate_addresses: vec_set::empty<address>(),
             nominee_addresses: vec_set::empty<address>(),
             voters: table::new<address, Table<address, bool>>(ctx),
+            version: upgrade::current_version(),
         };
         
         // Create Reputation Governance Registry
@@ -302,6 +305,7 @@ module social_contracts::governance {
             delegate_addresses: vec_set::empty<address>(),
             nominee_addresses: vec_set::empty<address>(),
             voters: table::new<address, Table<address, bool>>(ctx),
+            version: upgrade::current_version(),
         };
         
         // Create Community Notes Governance Registry
@@ -326,6 +330,7 @@ module social_contracts::governance {
             delegate_addresses: vec_set::empty<address>(),
             nominee_addresses: vec_set::empty<address>(),
             voters: table::new<address, Table<address, bool>>(ctx),
+            version: upgrade::current_version(),
         };
         
         // Initialize each registry's status tables
@@ -1773,6 +1778,7 @@ module social_contracts::governance {
             delegate_addresses: vec_set::empty<address>(),
             nominee_addresses: vec_set::empty<address>(),
             voters: table::new<address, Table<address, bool>>(ctx),
+            version: upgrade::current_version(),
         };
         
         // Initialize registry tables
@@ -1786,5 +1792,27 @@ module social_contracts::governance {
         
         // Return the registry ID
         registry_id
+    }
+
+    /// Get version of GovernanceRegistry
+    public fun version(registry: &GovernanceRegistry): u64 {
+        registry.version
+    }
+
+    /// Set version of GovernanceRegistry
+    public fun set_version(registry: &mut GovernanceRegistry, new_version: u64) {
+        registry.version = new_version;
+    }
+
+    /// Public entry function that migrates registry to the latest version
+    public entry fun migrate_registry(registry: &mut GovernanceRegistry, _ctx: &mut TxContext) {
+        let current_version = registry.version;
+        let latest_version = upgrade::current_version();
+
+        assert!(current_version < latest_version, EWrongVersion);
+
+        // Version-specific migrations would go here when needed
+        
+        registry.version = latest_version;
     }
 }

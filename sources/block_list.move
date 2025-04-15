@@ -12,11 +12,15 @@ module social_contracts::block_list {
     use mys::table::{Self, Table};
     use mys::vec_set::{Self, VecSet};
     use mys::dynamic_field;
+    use std::string;
+    
+    use social_contracts::upgrade::{Self, AdminCap};
     
     /// Error codes
     const EAlreadyBlocked: u64 = 1;
     const ENotBlocked: u64 = 2;
     const ECannotBlockSelf: u64 = 3;
+    const EWrongVersion: u64 = 4;
 
     /// Key for storing blocked wallets in the registry
     const BLOCKED_WALLETS_KEY: vector<u8> = b"blocked_wallets";
@@ -26,6 +30,8 @@ module social_contracts::block_list {
         id: object::UID,
         /// The wallet address this block list belongs to
         owner: address,
+        /// Version for upgrades
+        version: u64,
     }
     
     /// Registry to track all block lists
@@ -33,6 +39,8 @@ module social_contracts::block_list {
         id: object::UID,
         /// Table mapping wallet addresses to block list IDs
         wallet_block_lists: Table<address, address>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Block event
@@ -62,6 +70,7 @@ module social_contracts::block_list {
         BlockList {
             id: object::new(ctx),
             owner,
+            version: upgrade::current_version(),
         }
     }
 
@@ -100,6 +109,7 @@ module social_contracts::block_list {
         let registry = BlockListRegistry {
             id: object::new(ctx),
             wallet_block_lists: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Share the registry to make it globally accessible
@@ -303,5 +313,81 @@ module social_contracts::block_list {
         // Get the blocked wallets set and return its contents
         let blocked_wallets = dynamic_field::borrow<vector<u8>, VecSet<address>>(&registry.id, key);
         vec_set::into_keys(*blocked_wallets)
+    }
+
+    // === Versioning Functions ===
+
+    /// Get the version of a block list
+    public fun version(block_list: &BlockList): u64 {
+        block_list.version
+    }
+
+    /// Get a mutable reference to the block list version (for upgrade module)
+    public fun borrow_version_mut(block_list: &mut BlockList): &mut u64 {
+        &mut block_list.version
+    }
+
+    /// Get the version of the block list registry
+    public fun registry_version(registry: &BlockListRegistry): u64 {
+        registry.version
+    }
+
+    /// Get a mutable reference to the registry version (for upgrade module)
+    public fun borrow_registry_version_mut(registry: &mut BlockListRegistry): &mut u64 {
+        &mut registry.version
+    }
+
+    /// Migration function for BlockList
+    public entry fun migrate_block_list(
+        block_list: &mut BlockList,
+        _: &AdminCap,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(block_list.version < current_version, EWrongVersion);
+        
+        // Remember old version and update to new version
+        let old_version = block_list.version;
+        block_list.version = current_version;
+        
+        // Emit event for object migration
+        let block_list_id = object::id(block_list);
+        upgrade::emit_migration_event(
+            block_list_id,
+            string::utf8(b"BlockList"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
+    /// Migration function for BlockListRegistry
+    public entry fun migrate_block_list_registry(
+        registry: &mut BlockListRegistry,
+        _: &AdminCap,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(registry.version < current_version, EWrongVersion);
+        
+        // Remember old version and update to new version
+        let old_version = registry.version;
+        registry.version = current_version;
+        
+        // Emit event for object migration
+        let registry_id = object::id(registry);
+        upgrade::emit_migration_event(
+            registry_id,
+            string::utf8(b"BlockListRegistry"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
     }
 }

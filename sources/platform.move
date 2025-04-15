@@ -25,6 +25,7 @@ module social_contracts::platform {
     use social_contracts::profile;
     use social_contracts::post;
     use social_contracts::governance;
+    use social_contracts::upgrade;
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -35,6 +36,7 @@ module social_contracts::platform {
     const ENotContractOwner: u64 = 7;
     const EAlreadyJoined: u64 = 8;
     const ENotJoined: u64 = 9;
+    const EWrongVersion: u64 = 10;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -101,6 +103,8 @@ module social_contracts::platform {
         quorum_votes: Option<u64>,
         /// ID of governance registry if created
         governance_registry_id: Option<ID>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Platform registry that keeps track of all platforms
@@ -110,6 +114,8 @@ module social_contracts::platform {
         platforms_by_name: Table<String, address>,
         /// Table mapping developer addresses to their platforms
         platforms_by_developer: Table<address, vector<address>>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Platform created event
@@ -202,6 +208,7 @@ module social_contracts::platform {
             id: object::new(ctx),
             platforms_by_name: table::new(ctx),
             platforms_by_developer: table::new(ctx),
+            version: upgrade::current_version(),
         };
 
         transfer::share_object(registry);
@@ -231,6 +238,9 @@ module social_contracts::platform {
         quorum_votes: Option<u64>,
         ctx: &mut TxContext
     ) {
+        // Check version compatibility
+        assert!(registry.version == upgrade::current_version(), EWrongVersion);
+        
         let platform_id = object::new(ctx);
         let developer = tx_context::sender(ctx);
         let now = tx_context::epoch(ctx);
@@ -275,6 +285,7 @@ module social_contracts::platform {
             voting_period_epochs: actual_voting_period_epochs,
             quorum_votes: actual_quorum_votes,
             governance_registry_id: option::none(),
+            version: upgrade::current_version(),
         };
         
         // Create empty moderators set
@@ -335,6 +346,9 @@ module social_contracts::platform {
         new_shutdown_date: Option<String>,
         ctx: &mut TxContext
     ) {
+        // Check version compatibility
+        assert!(platform.version == upgrade::current_version(), EWrongVersion);
+        
         let now = tx_context::epoch(ctx);
 
         // Verify caller is platform developer
@@ -368,6 +382,26 @@ module social_contracts::platform {
             shutdown_date: platform.shutdown_date,
             updated_at: now,
         });
+    }
+
+    /// Get the version of a platform
+    public fun platform_version(platform: &Platform): u64 {
+        platform.version
+    }
+
+    /// Get a mutable reference to the platform version (only for upgrade module)
+    public fun borrow_platform_version_mut(platform: &mut Platform): &mut u64 {
+        &mut platform.version
+    }
+
+    /// Get the version of the platform registry
+    public fun registry_version(registry: &PlatformRegistry): u64 {
+        registry.version
+    }
+
+    /// Get a mutable reference to the registry version (only for upgrade module)
+    public fun borrow_registry_version_mut(registry: &mut PlatformRegistry): &mut u64 {
+        &mut registry.version
     }
 
     /// Add MYS tokens to platform treasury
@@ -929,6 +963,7 @@ module social_contracts::platform {
             id: object::new(ctx),
             platforms_by_name: table::new(ctx),
             platforms_by_developer: table::new(ctx),
+            version: 1, // Set to version 1 for testing
         };
 
         transfer::share_object(registry);

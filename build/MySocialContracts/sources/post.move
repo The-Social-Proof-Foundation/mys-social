@@ -22,6 +22,7 @@ module social_contracts::post {
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::platform;
     use social_contracts::block_list::{Self, BlockListRegistry};
+    use social_contracts::upgrade::{Self, AdminCap};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -47,6 +48,7 @@ module social_contracts::post {
     const EUserNotJoinedPlatform: u64 = 23;
     const EUserBlockedByPlatform: u64 = 24;
     const EAdminCapRequiredForPrediction: u64 = 25;
+    const EWrongVersion: u64 = 26;
 
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
@@ -109,6 +111,8 @@ module social_contracts::post {
         user_reactions: Table<address, String>,
         /// Table to count reactions by type
         reaction_counts: Table<String, u64>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Comment object for posts, supporting nested comments
@@ -146,6 +150,8 @@ module social_contracts::post {
         user_reactions: Table<address, String>,
         /// Table to count reactions by type
         reaction_counts: Table<String, u64>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Repost reference
@@ -161,6 +167,8 @@ module social_contracts::post {
         profile_id: address,
         /// Creation timestamp
         created_at: u64,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Post created event
@@ -979,6 +987,7 @@ module social_contracts::post {
             removed_from_platform: false,
             user_reactions: table::new(ctx),
             reaction_counts: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Get post ID before sharing
@@ -1112,6 +1121,7 @@ module social_contracts::post {
             removed_from_platform: false,
             user_reactions: table::new(ctx),
             reaction_counts: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Get comment ID before sharing
@@ -1307,6 +1317,7 @@ module social_contracts::post {
                 owner,
                 profile_id,
                 created_at: tx_context::epoch(ctx),
+                version: upgrade::current_version(),
             };
             
             // Get repost ID before sharing
@@ -1389,6 +1400,7 @@ module social_contracts::post {
             removed_from_platform: _,
             user_reactions,
             reaction_counts,
+            version: _,
         } = post;
         
         // Clean up associated data structures
@@ -1444,6 +1456,7 @@ module social_contracts::post {
             removed_from_platform: _,
             user_reactions,
             reaction_counts,
+            version: _,
         } = comment;
         
         // Clean up associated data structures
@@ -2275,5 +2288,118 @@ module social_contracts::post {
         transfer::public_transfer(admin_cap, tx_context::sender(ctx));
         
         admin_cap_id
+    }
+
+    // === Versioning Functions ===
+
+    /// Get the version of a post
+    public fun version(post: &Post): u64 {
+        post.version
+    }
+
+    /// Get a mutable reference to the post version (for upgrade module)
+    public fun borrow_version_mut(post: &mut Post): &mut u64 {
+        &mut post.version
+    }
+
+    /// Get the version of a comment
+    public fun comment_version(comment: &Comment): u64 {
+        comment.version
+    }
+
+    /// Get a mutable reference to the comment version (for upgrade module)
+    public fun borrow_comment_version_mut(comment: &mut Comment): &mut u64 {
+        &mut comment.version
+    }
+
+    /// Get the version of a repost
+    public fun repost_version(repost: &Repost): u64 {
+        repost.version
+    }
+
+    /// Get a mutable reference to the repost version (for upgrade module)
+    public fun borrow_repost_version_mut(repost: &mut Repost): &mut u64 {
+        &mut repost.version
+    }
+
+    /// Migration function for Post
+    public entry fun migrate_post(
+        post: &mut Post,
+        _: &AdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(post.version < current_version, EWrongVersion);
+        
+        // Remember old version and update to new version
+        let old_version = post.version;
+        post.version = current_version;
+        
+        // Emit event for object migration
+        let post_id = object::id(post);
+        upgrade::emit_migration_event(
+            post_id,
+            string::utf8(POST_TYPE_STANDARD),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
+    /// Migration function for Comment
+    public entry fun migrate_comment(
+        comment: &mut Comment,
+        _: &AdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(comment.version < current_version, EWrongVersion);
+        
+        // Remember old version and update to new version
+        let old_version = comment.version;
+        comment.version = current_version;
+        
+        // Emit event for object migration
+        let comment_id = object::id(comment);
+        upgrade::emit_migration_event(
+            comment_id,
+            string::utf8(b"Comment"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
+    /// Migration function for Repost
+    public entry fun migrate_repost(
+        repost: &mut Repost,
+        _: &AdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(repost.version < current_version, EWrongVersion);
+        
+        // Remember old version and update to new version
+        let old_version = repost.version;
+        repost.version = current_version;
+        
+        // Emit event for object migration
+        let repost_id = object::id(repost);
+        upgrade::emit_migration_event(
+            repost_id,
+            string::utf8(b"Repost"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
     }
 }

@@ -27,6 +27,7 @@ module social_contracts::token_exchange {
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::post::{Self, Post};
     use social_contracts::block_list::{Self, BlockListRegistry};
+    use social_contracts::upgrade::{Self, AdminCap as UpgradeAdminCap};
 
     // === Error codes ===
     /// Operation can only be performed by the admin
@@ -151,6 +152,8 @@ module social_contracts::token_exchange {
         tokens: Table<address, TokenInfo>,
         /// Table from profile/post ID to auction info
         auctions: Table<address, AuctionInfo>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Information about a token
@@ -186,6 +189,8 @@ module social_contracts::token_exchange {
         mys_balance: Balance<MYS>,
         /// Mapping of holders' addresses to their token balances
         holders: Table<address, u64>,
+        /// Version for upgrades
+        version: u64,
     }
 
     /// Social token that represents a user's owned tokens
@@ -230,6 +235,8 @@ module social_contracts::token_exchange {
         mys_balance: Balance<MYS>,
         /// Mapping of contributors' addresses to their MYS contributions
         contributions: Table<address, u64>,
+        /// Version for upgrades
+        version: u64,
     }
 
     // === Events ===
@@ -353,6 +360,7 @@ module social_contracts::token_exchange {
                 id: object::new(ctx),
                 tokens: table::new(ctx),
                 auctions: table::new(ctx),
+                version: upgrade::current_version(),
             }
         );
     }
@@ -488,6 +496,7 @@ module social_contracts::token_exchange {
             info: auction_info,
             mys_balance: balance::zero(),
             contributions: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Add to registry
@@ -559,6 +568,7 @@ module social_contracts::token_exchange {
             info: auction_info,
             mys_balance: balance::zero(),
             contributions: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Add to registry
@@ -762,6 +772,7 @@ module social_contracts::token_exchange {
             info: updated_token_info,
             mys_balance: balance::zero(),
             holders: table::new(ctx),
+            version: upgrade::current_version(),
         };
         
         // Distribute tokens to contributors
@@ -1285,5 +1296,118 @@ module social_contracts::token_exchange {
     /// Initialize the token exchange for testing
     public fun init_for_testing(ctx: &mut TxContext) {
         init(ctx)
+    }
+
+    // === Versioning Functions ===
+
+    /// Get the version of the token registry
+    public fun registry_version(registry: &TokenRegistry): u64 {
+        registry.version
+    }
+
+    /// Get a mutable reference to the registry version (for upgrade module)
+    public fun borrow_registry_version_mut(registry: &mut TokenRegistry): &mut u64 {
+        &mut registry.version
+    }
+
+    /// Get the version of a token pool
+    public fun pool_version(pool: &TokenPool): u64 {
+        pool.version
+    }
+
+    /// Get a mutable reference to the pool version (for upgrade module)
+    public fun borrow_pool_version_mut(pool: &mut TokenPool): &mut u64 {
+        &mut pool.version
+    }
+
+    /// Get the version of an auction pool
+    public fun auction_version(pool: &AuctionPool): u64 {
+        pool.version
+    }
+
+    /// Get a mutable reference to the auction pool version (for upgrade module)
+    public fun borrow_auction_version_mut(pool: &mut AuctionPool): &mut u64 {
+        &mut pool.version
+    }
+
+    /// Migration function for TokenRegistry
+    public entry fun migrate_token_registry(
+        registry: &mut TokenRegistry,
+        _: &UpgradeAdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(registry.version < current_version, EInvalidFeeConfig);
+        
+        // Remember old version and update to new version
+        let old_version = registry.version;
+        registry.version = current_version;
+        
+        // Emit event for object migration
+        let registry_id = object::id(registry);
+        upgrade::emit_migration_event(
+            registry_id,
+            string::utf8(b"TokenRegistry"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
+    /// Migration function for TokenPool
+    public entry fun migrate_token_pool(
+        pool: &mut TokenPool,
+        _: &UpgradeAdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(pool.version < current_version, EInvalidFeeConfig);
+        
+        // Remember old version and update to new version
+        let old_version = pool.version;
+        pool.version = current_version;
+        
+        // Emit event for object migration
+        let pool_id = object::id(pool);
+        upgrade::emit_migration_event(
+            pool_id,
+            string::utf8(b"TokenPool"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
+    /// Migration function for AuctionPool
+    public entry fun migrate_auction_pool(
+        pool: &mut AuctionPool,
+        _: &UpgradeAdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(pool.version < current_version, EInvalidFeeConfig);
+        
+        // Remember old version and update to new version
+        let old_version = pool.version;
+        pool.version = current_version;
+        
+        // Emit event for object migration
+        let pool_id = object::id(pool);
+        upgrade::emit_migration_event(
+            pool_id,
+            string::utf8(b"AuctionPool"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
     }
 } 

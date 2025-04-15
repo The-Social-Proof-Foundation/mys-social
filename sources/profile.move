@@ -17,6 +17,11 @@ module social_contracts::profile {
     use mys::url::{Self, Url};
     use mys::dynamic_field;
     use mys::table::{Self, Table};
+    use mys::coin::{Self, Coin};
+    use mys::balance::{Self, Balance};
+    use mys::mys::MYS;
+    use mys::package::{Self, Publisher};
+    use social_contracts::upgrade;
 
     /// Error codes
     const EProfileAlreadyExists: u64 = 0;
@@ -31,7 +36,15 @@ module social_contracts::profile {
     const EUsernameNotAvailable: u64 = 9;
     const ENotAdmin: u64 = 10;
     const ENotAuthorizedService: u64 = 12;
-    
+    // New error codes for profile offers
+    const EOfferAlreadyExists: u64 = 13;
+    const EOfferDoesNotExist: u64 = 14;
+    const ECannotOfferOwnProfile: u64 = 15;
+    const EInsufficientTokens: u64 = 16;
+    const EUnauthorizedOfferAction: u64 = 17;
+    const EOfferBelowMinimum: u64 = 18;
+    const PROFILE_SALE_FEE_BPS: u64 = 500;
+
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
         b"admin", 
@@ -60,6 +73,15 @@ module social_contracts::profile {
 
     /// Field names for dynamic fields
     const USERNAME_FIELD: vector<u8> = b"username";
+    // Field name for offers
+    const OFFERS_FIELD: vector<u8> = b"profile_offers";
+
+    /// Social Platform Treasury that receives fees from profile sales
+    public struct PlatformTreasury has key {
+        id: UID,
+        /// Treasury address that receives fees
+        treasury_address: address,
+    }
 
     /// Username Registry that stores mappings between usernames and profiles
     public struct UsernameRegistry has key {
@@ -68,6 +90,8 @@ module social_contracts::profile {
         usernames: Table<String, address>,
         // Maps addresses (owners) to their profile IDs
         address_profiles: Table<address, address>,
+        // Version of the registry, allows for controlled upgrades
+        version: u64,
     }
 
     
@@ -130,6 +154,8 @@ module social_contracts::profile {
         post_count: u64,
         /// Total amount of tips received
         tips_received: u64,
+        /// Minimum offer amount in MYSO tokens the owner is willing to accept (optional)
+        min_offer_amount: Option<u64>,
     }
 
     // === Events ===
@@ -174,17 +200,78 @@ module social_contracts::profile {
         facebook_username: Option<String>,
         reddit_username: Option<String>,
         github_username: Option<String>,
+        min_offer_amount: Option<u64>,
+    }
+
+    /// Event emitted when an offer is created for a profile
+    public struct ProfileOfferCreatedEvent has copy, drop {
+        profile_id: address,
+        offeror: address,
+        amount: u64,
+        created_at: u64,
+    }
+
+    /// Event emitted when an offer is accepted
+    public struct ProfileOfferAcceptedEvent has copy, drop {
+        profile_id: address,
+        offeror: address,
+        previous_owner: address,
+        amount: u64,
+        accepted_at: u64,
+    }
+
+    /// Event emitted when an offer is rejected or revoked
+    public struct ProfileOfferRejectedEvent has copy, drop {
+        profile_id: address,
+        offeror: address,
+        rejected_by: address,
+        amount: u64,
+        rejected_at: u64,
+        is_revoked: bool,
+    }
+
+    /// Represents an offer to purchase a profile
+    public struct ProfileOffer has store {
+        offeror: address,
+        amount: u64,
+        created_at: u64,
+        locked_myso: Balance<MYS>,
+    }
+
+    /// Event emitted when a fee is collected from a profile sale
+    public struct ProfileSaleFeeEvent has copy, drop {
+        profile_id: address,
+        offeror: address,
+        previous_owner: address,
+        sale_amount: u64,
+        fee_amount: u64,
+        fee_recipient: address,
+        timestamp: u64,
     }
 
     /// Module initializer to create the username registry
     fun init(ctx: &mut TxContext) {
+        // Import current version from upgrade module
+        let current_version = upgrade::current_version();
+        
         let registry = UsernameRegistry {
             id: object::new(ctx),
             usernames: table::new(ctx),
             address_profiles: table::new(ctx),
+            version: current_version,
         };
+        
+        // Create the platform treasury owned by the contract deployer
+        let treasury = PlatformTreasury {
+            id: object::new(ctx),
+            treasury_address: tx_context::sender(ctx),
+        };
+        
         // Share the registry to make it globally accessible
         transfer::share_object(registry);
+        
+        // Share the treasury to make it globally accessible
+        transfer::share_object(treasury);
     }
 
     // === Username Management Functions ===
@@ -256,7 +343,6 @@ module social_contracts::profile {
 
     // === Profile Creation and Management ===
 
-
     /// Create a new profile with a required username
     /// This is the main entry point for new users, combining profile and username creation
     public entry fun create_profile(
@@ -268,6 +354,9 @@ module social_contracts::profile {
         cover_photo_url: vector<u8>,
         ctx: &mut TxContext
     ) {
+        // Check version compatibility
+        assert!(registry.version == upgrade::current_version(), 1);
+        
         let owner = tx_context::sender(ctx);
         let now = tx_context::epoch(ctx);
 
@@ -336,6 +425,7 @@ module social_contracts::profile {
             following_count: 0,
             post_count: 0,
             tips_received: 0,
+            min_offer_amount: option::none(),
         };
         
         // Get the profile ID
@@ -401,6 +491,9 @@ module social_contracts::profile {
         new_owner: address,
         ctx: &mut TxContext
     ) {
+        // Check version compatibility
+        assert!(registry.version == upgrade::current_version(), 1);
+        
         let sender = tx_context::sender(ctx);
         
         // Verify sender is the owner
@@ -411,6 +504,13 @@ module social_contracts::profile {
         
         // Update registry mappings
         table::remove(&mut registry.address_profiles, sender);
+        
+        // Check if the offeror already has a profile in the registry
+        // If so, remove it before adding the new mapping (allows profile swapping)
+        if (table::contains(&registry.address_profiles, new_owner)) {
+            table::remove(&mut registry.address_profiles, new_owner);
+        };
+        
         table::add(&mut registry.address_profiles, new_owner, profile_id);
         
         // Update the profile owner
@@ -458,6 +558,7 @@ module social_contracts::profile {
             facebook_username: profile.facebook_username,
             reddit_username: profile.reddit_username,
             github_username: profile.github_username,
+            min_offer_amount: profile.min_offer_amount,
         });
         
         // Transfer profile to new owner
@@ -491,6 +592,7 @@ module social_contracts::profile {
         facebook_username: Option<String>,
         reddit_username: Option<String>,
         github_username: Option<String>,
+        min_offer_amount: Option<u64>,
         ctx: &mut TxContext
     ) {
         // Verify sender is the owner
@@ -583,6 +685,10 @@ module social_contracts::profile {
         if (option::is_some(&github_username)) {
             profile.github_username = github_username;
         };
+
+        if (option::is_some(&min_offer_amount)) {
+            profile.min_offer_amount = min_offer_amount;
+        };
         
         // Update the last updated timestamp
         profile.last_updated = now;
@@ -638,6 +744,7 @@ module social_contracts::profile {
             facebook_username: profile.facebook_username,
             reddit_username: profile.reddit_username,
             github_username: profile.github_username,
+            min_offer_amount: profile.min_offer_amount,
         });
     }
     
@@ -847,6 +954,316 @@ module social_contracts::profile {
         profile.following_count
     }
 
+    /// Create an offer to purchase a profile
+    /// Locks MYSO tokens in the offer
+    public entry fun create_offer(
+        registry: &mut UsernameRegistry,
+        profile: &mut Profile,
+        coin: &mut Coin<MYS>,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let profile_owner = profile.owner;
+        let profile_id = object::uid_to_address(&profile.id);
+        let now = tx_context::epoch(ctx);
+        
+        // Cannot offer on your own profile
+        assert!(sender != profile_owner, ECannotOfferOwnProfile);
+        
+        // Check if there's sufficient tokens
+        assert!(coin::value(coin) >= amount && amount > 0, EInsufficientTokens);
+        
+        // Check if the offer meets the minimum amount requirement (if set)
+        if (option::is_some(&profile.min_offer_amount)) {
+            let min_amount = *option::borrow(&profile.min_offer_amount);
+            assert!(amount >= min_amount, EOfferBelowMinimum);
+        };
+        
+        // Initialize offers table if it doesn't exist
+        if (!dynamic_field::exists_(&profile.id, OFFERS_FIELD)) {
+            let offers = table::new<address, ProfileOffer>(ctx);
+            dynamic_field::add(&mut profile.id, OFFERS_FIELD, offers);
+        };
+        
+        // Get the offers table
+        let offers = dynamic_field::borrow_mut<vector<u8>, Table<address, ProfileOffer>>(&mut profile.id, OFFERS_FIELD);
+        
+        // Check if the sender already has an offer
+        assert!(!table::contains(offers, sender), EOfferAlreadyExists);
+        
+        // Split tokens from the coin and convert to a balance for secure storage
+        let offer_coin = coin::split(coin, amount, ctx);
+        // Convert to balance to lock tokens in the offer
+        let locked_myso = coin::into_balance(offer_coin);
+        
+        // Create and store the offer with locked tokens
+        let offer = ProfileOffer {
+            offeror: sender,
+            amount,
+            created_at: now,
+            locked_myso,
+        };
+        
+        table::add(offers, sender, offer);
+        
+        // Emit an event to track offer creation
+        event::emit(ProfileOfferCreatedEvent {
+            profile_id,
+            offeror: sender,
+            amount,
+            created_at: now,
+        });
+    }
+    
+    /// Accept an offer to purchase a profile
+    /// Transfers tokens to the profile owner and profile ownership to the offeror
+    public entry fun accept_offer(
+        registry: &mut UsernameRegistry,
+        mut profile: Profile,
+        treasury: &PlatformTreasury,
+        offeror: address,
+        new_main_profile: Option<address>,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let profile_id = object::uid_to_address(&profile.id);
+        let now = tx_context::epoch(ctx);
+        
+        // Verify sender is the profile owner
+        assert!(profile.owner == sender, EUnauthorized);
+        
+        // Check if offers table exists
+        assert!(dynamic_field::exists_(&profile.id, OFFERS_FIELD), EOfferDoesNotExist);
+        
+        // Get the offers table
+        let offers = dynamic_field::borrow_mut<vector<u8>, Table<address, ProfileOffer>>(&mut profile.id, OFFERS_FIELD);
+        
+        // Check if the offer exists
+        assert!(table::contains(offers, offeror), EOfferDoesNotExist);
+        
+        // Remove the offer from the table and get the locked tokens
+        let ProfileOffer { offeror: _, amount, created_at: _, locked_myso } = table::remove(offers, offeror);
+        
+        // Calculate the fee amount (5% of the total)
+        let fee_amount = (amount * PROFILE_SALE_FEE_BPS) / 10000;
+        // Calculate amount to send to profile owner
+        let owner_amount = amount - fee_amount;
+        
+        // Convert the locked balance to a coin
+        let mut payment = coin::from_balance(locked_myso, ctx);
+        
+        // Split the fee amount to send to the treasury
+        let fee_payment = coin::split(&mut payment, fee_amount, ctx);
+        
+        // Send the fee to the platform treasury
+        transfer::public_transfer(fee_payment, treasury.treasury_address);
+        
+        // Send the remaining amount to the profile owner
+        transfer::public_transfer(payment, sender);
+        
+        // Update registry mappings to reflect new ownership
+        table::remove(&mut registry.address_profiles, sender);
+        
+        // Check if the offeror already has a profile in the registry
+        // If so, remove it before adding the new mapping (allows profile swapping)
+        if (table::contains(&registry.address_profiles, offeror)) {
+            table::remove(&mut registry.address_profiles, offeror);
+        };
+        
+        // Add new mapping for buyer
+        table::add(&mut registry.address_profiles, offeror, profile_id);
+        
+        // If the seller provided a new main profile, register it as their main profile
+        if (option::is_some(&new_main_profile)) {
+            let new_profile_id = *option::borrow(&new_main_profile);
+            // Add the new profile mapping for the seller
+            table::add(&mut registry.address_profiles, sender, new_profile_id);
+        };
+        
+        // Update the profile owner
+        let previous_owner = profile.owner;
+        profile.owner = offeror;
+        
+        // Emit an event to track offer acceptance and token transfer
+        event::emit(ProfileOfferAcceptedEvent {
+            profile_id,
+            offeror,
+            previous_owner,
+            amount,
+            accepted_at: now,
+        });
+        
+        // Emit a comprehensive profile updated event to indicate ownership change
+        event::emit(ProfileUpdatedEvent {
+            profile_id,
+            display_name: profile.display_name,
+            username: if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
+                option::some(*dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD))
+            } else {
+                option::none()
+            },
+            bio: profile.bio,
+            profile_picture: if (option::is_some(&profile.profile_picture)) {
+                let url = option::borrow(&profile.profile_picture);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            cover_photo: if (option::is_some(&profile.cover_photo)) {
+                let url = option::borrow(&profile.cover_photo);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            owner: offeror,
+            updated_at: now,
+            // Include all sensitive fields
+            birthdate: profile.birthdate,
+            current_location: profile.current_location,
+            raised_location: profile.raised_location,
+            phone: profile.phone,
+            email: profile.email,
+            gender: profile.gender,
+            political_view: profile.political_view,
+            religion: profile.religion,
+            education: profile.education,
+            website: profile.website,
+            primary_language: profile.primary_language,
+            relationship_status: profile.relationship_status,
+            x_username: profile.x_username,
+            mastodon_username: profile.mastodon_username,
+            facebook_username: profile.facebook_username,
+            reddit_username: profile.reddit_username,
+            github_username: profile.github_username,
+            min_offer_amount: profile.min_offer_amount,
+        });
+        
+        // Emit a fee event
+        event::emit(ProfileSaleFeeEvent {
+            profile_id,
+            offeror,
+            previous_owner,
+            sale_amount: amount,
+            fee_amount,
+            fee_recipient: treasury.treasury_address,
+            timestamp: now,
+        });
+        
+        // Transfer the profile object to the new owner
+        transfer::public_transfer(profile, offeror);
+    }
+    
+    /// Reject or revoke an offer on a profile
+    /// Can be called by the profile owner to reject or the offeror to revoke
+    /// Returns locked MYSO tokens to the offeror
+    public entry fun reject_or_revoke_offer(
+        registry: &mut UsernameRegistry,
+        profile: &mut Profile,
+        offeror: address,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let profile_id = object::uid_to_address(&profile.id);
+        let now = tx_context::epoch(ctx);
+        
+        // Check if offers table exists
+        assert!(dynamic_field::exists_(&profile.id, OFFERS_FIELD), EOfferDoesNotExist);
+        
+        // Get the offers table
+        let offers = dynamic_field::borrow_mut<vector<u8>, Table<address, ProfileOffer>>(&mut profile.id, OFFERS_FIELD);
+        
+        // Check if the offer exists
+        assert!(table::contains(offers, offeror), EOfferDoesNotExist);
+        
+        // Verify sender is either the profile owner or the offeror
+        assert!(profile.owner == sender || offeror == sender, EUnauthorizedOfferAction);
+        
+        // Remove the offer from the table and get the locked tokens
+        let ProfileOffer { offeror, amount, created_at: _, locked_myso } = table::remove(offers, offeror);
+        
+        // Convert the locked balance back to a coin and return to the offeror
+        // This unlocks the tokens and returns them to the original offeror
+        let refund = coin::from_balance(locked_myso, ctx);
+        transfer::public_transfer(refund, offeror);
+        
+        // Determine if this is a rejection (by owner) or revocation (by offeror)
+        let is_revoked = offeror == sender;
+        
+        // Emit an event to track offer rejection/revocation and token return
+        event::emit(ProfileOfferRejectedEvent {
+            profile_id,
+            offeror,
+            rejected_by: sender,
+            amount,
+            rejected_at: now,
+            is_revoked,
+        });
+    }
+
+    /// Check if a profile has an offer from a specific address
+    public fun has_offer_from(profile: &Profile, offeror: address): bool {
+        if (!dynamic_field::exists_(&profile.id, OFFERS_FIELD)) {
+            return false
+        };
+        
+        let offers = dynamic_field::borrow<vector<u8>, Table<address, ProfileOffer>>(&profile.id, OFFERS_FIELD);
+        table::contains(offers, offeror)
+    }
+    
+    /// Check if a profile has any active offers
+    public fun has_offers(profile: &Profile): bool {
+        if (!dynamic_field::exists_(&profile.id, OFFERS_FIELD)) {
+            return false
+        };
+        
+        let offers = dynamic_field::borrow<vector<u8>, Table<address, ProfileOffer>>(&profile.id, OFFERS_FIELD);
+        table::length(offers) > 0
+    }
+
+    /// Get the treasury address from the PlatformTreasury
+    public fun get_treasury_address(treasury: &PlatformTreasury): address {
+        treasury.treasury_address
+    }
+
+    // Accessor for version field
+    public fun version(registry: &UsernameRegistry): u64 {
+        registry.version
+    }
+
+    // Mutable accessor for version field (only for upgrade module)
+    public fun borrow_version_mut(registry: &mut UsernameRegistry): &mut u64 {
+        &mut registry.version
+    }
+
+    /// Migrate the registry to a new version
+    /// Only callable by the admin with the AdminCap
+    public entry fun migrate_registry(
+        registry: &mut UsernameRegistry,
+        _: &upgrade::AdminCap,
+        ctx: &mut TxContext
+    ) {
+        let current_version = upgrade::current_version();
+        
+        // Verify this is an upgrade (new version > current version)
+        assert!(registry.version < current_version, 1);
+        
+        // Remember old version and update to new version
+        let old_version = registry.version;
+        registry.version = current_version;
+        
+        // Emit event for object migration
+        let registry_id = object::id(registry);
+        upgrade::emit_migration_event(
+            registry_id,
+            string::utf8(b"UsernameRegistry"),
+            old_version,
+            tx_context::sender(ctx)
+        );
+        
+        // Any migration logic can be added here for future upgrades
+    }
+
     #[test_only]
     /// Initialize test environment for profile module
     public fun test_init(ctx: &mut TxContext) {
@@ -854,6 +1271,7 @@ module social_contracts::profile {
             id: object::new(ctx),
             usernames: table::new(ctx),
             address_profiles: table::new(ctx),
+            version: 1,
         };
         
         transfer::share_object(registry);
@@ -908,6 +1326,7 @@ module social_contracts::profile {
             post_count: 0,
             tips_received: 0,
             following_count: 0,
+            min_offer_amount: option::none(),
         };
         
         // Get the profile ID and use it for registration
@@ -921,5 +1340,15 @@ module social_contracts::profile {
         
         // Share the profile
         transfer::share_object(profile);
+    }
+
+    /// Get the minimum offer amount for a profile
+    public fun min_offer_amount(profile: &Profile): &Option<u64> {
+        &profile.min_offer_amount
+    }
+
+    /// Check if a profile is for sale (has a minimum offer amount set)
+    public fun is_for_sale(profile: &Profile): bool {
+        option::is_some(&profile.min_offer_amount)
     }
 }
