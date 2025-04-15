@@ -21,6 +21,7 @@ module social_contracts::post {
     
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::platform;
+    use social_contracts::block_list::{Self, BlockListRegistry};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -35,6 +36,17 @@ module social_contracts::post {
     const EReportReasonInvalid: u64 = 12;
     const EReportDescriptionTooLong: u64 = 13;
     const EReactionContentTooLong: u64 = 14;
+    const EPredictionOptionsTooMany: u64 = 15;
+    const EPredictionOptionsEmpty: u64 = 16;
+    const EPredictionAlreadyResolved: u64 = 17;
+    const EPredictionUnresolved: u64 = 18;
+    const EPredictionOptionInvalid: u64 = 19;
+    const ENotPredictionPost: u64 = 20;
+    const EPredictionBettingClosed: u64 = 21;
+    const EPredictionDisabled: u64 = 22;
+    const EUserNotJoinedPlatform: u64 = 23;
+    const EUserBlockedByPlatform: u64 = 24;
+    const EAdminCapRequiredForPrediction: u64 = 25;
 
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
@@ -45,11 +57,13 @@ module social_contracts::post {
     const MAX_REACTION_LENGTH: u64 = 20; // 50 chars max for a reaction
     const COMMENTER_TIP_PERCENTAGE: u64 = 80; // 80% of tip goes to commenter, 20% to post owner
     const REPOST_TIP_PERCENTAGE: u64 = 50; // 50% of tip goes to repost owner, 50% to original post owner
+    const MAX_PREDICTION_OPTIONS: u64 = 10; // Maximum number of prediction options
 
     /// Valid post types
     const POST_TYPE_STANDARD: vector<u8> = b"standard";
     const POST_TYPE_REPOST: vector<u8> = b"repost";
     const POST_TYPE_QUOTE_REPOST: vector<u8> = b"quote_repost";
+    const POST_TYPE_PREDICTION: vector<u8> = b"prediction";
 
     /// Constants for report reason codes
     const REPORT_REASON_SPAM: u8 = 1;
@@ -277,6 +291,664 @@ module social_contracts::post {
         deleted_at: u64,
     }
 
+    /// Prediction option structure
+    public struct PredictionOption has store, copy, drop {
+        id: u8,
+        description: String,
+        total_bet: u64,  // Total MYS coins bet on this option
+    }
+
+    /// Prediction bet record
+    public struct PredictionBet has store, copy, drop {
+        user: address,
+        option_id: u8,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    /// Prediction metadata
+    public struct PredictionData has key, store {
+        id: UID,
+        post_id: address,
+        options: vector<PredictionOption>,
+        bets: vector<PredictionBet>,
+        resolved: bool,
+        winning_option_id: Option<u8>,
+        betting_end_time: Option<u64>,
+        total_bet_amount: u64,
+    }
+
+    /// Admin capability for resolving predictions
+    public struct PredictionAdminCap has key, store {
+        id: UID,
+    }
+
+    /// Prediction creation event
+    public struct PredictionCreatedEvent has copy, drop {
+        post_id: address,
+        prediction_data_id: address,
+        owner: address,
+        profile_id: address,
+        content: String,
+        options: vector<String>,
+        betting_end_time: Option<u64>,
+    }
+
+    /// Prediction bet placed event
+    public struct PredictionBetPlacedEvent has copy, drop {
+        post_id: address,
+        user: address,
+        option_id: u8,
+        amount: u64,
+    }
+
+    /// Prediction resolved event
+    public struct PredictionResolvedEvent has copy, drop {
+        post_id: address,
+        winning_option_id: u8,
+        total_bet_amount: u64,
+        winning_amount: u64,
+        resolved_by: address,
+    }
+
+    /// Prediction payout event
+    public struct PredictionPayoutEvent has copy, drop {
+        post_id: address,
+        user: address,
+        amount: u64,
+    }
+
+    /// Prediction bet withdrawn event
+    public struct PredictionBetWithdrawnEvent has copy, drop {
+        post_id: address,
+        user: address,
+        option_id: u8,
+        original_amount: u64,
+        withdrawal_amount: u64,
+    }
+
+    /// Global post feature configuration
+    public struct PostConfig has key {
+        id: UID,
+        /// Indicates if prediction posts are enabled
+        predictions_enabled: bool,
+        /// Prediction platform fee in basis points (100 = 1%)
+        prediction_fee_bps: u64,
+        /// Treasury address for prediction fees
+        prediction_treasury: address,
+    }
+    
+    /// Initialize the post module
+    fun init(ctx: &mut TxContext) {
+        let sender = tx_context::sender(ctx);
+        
+        // Create and share post configuration
+        transfer::share_object(
+            PostConfig {
+                id: object::new(ctx),
+                predictions_enabled: false, // Predictions disabled by default
+                prediction_fee_bps: 500, // Default 5% fee
+                prediction_treasury: sender, // Initially set to publisher
+            }
+        );
+        
+        // Create and transfer the admin capability to the module publisher
+        let admin_cap = PredictionAdminCap {
+            id: object::new(ctx),
+        };
+        
+        transfer::transfer(admin_cap, sender);
+    }
+    
+    /// Enable or disable prediction functionality (admin only)
+    public entry fun set_predictions_enabled(
+        publisher: &Publisher,
+        config: &mut PostConfig,
+        enabled: bool,
+        _ctx: &mut TxContext
+    ) {
+        // Verify the publisher is for this module
+        assert!(package::from_module<Post>(publisher), EUnauthorized);
+        
+        // Update configuration
+        config.predictions_enabled = enabled;
+    }
+    
+    /// Set prediction fee (admin only)
+    public entry fun set_prediction_fee(
+        publisher: &Publisher,
+        config: &mut PostConfig,
+        fee_bps: u64,
+        treasury: address,
+        _ctx: &mut TxContext
+    ) {
+        // Verify the publisher is for this module
+        assert!(package::from_module<Post>(publisher), EUnauthorized);
+        
+        // Ensure fee is reasonable (max 25%)
+        assert!(fee_bps <= 2500, EInvalidTipAmount);
+        
+        // Update configuration
+        config.prediction_fee_bps = fee_bps;
+        config.prediction_treasury = treasury;
+    }
+    
+    /// Check if predictions are enabled
+    public fun is_predictions_enabled(config: &PostConfig): bool {
+        config.predictions_enabled
+    }
+
+    /// Create a new prediction post
+    public entry fun create_prediction_post(
+        config: &PostConfig,
+        _admin_cap: &PredictionAdminCap,
+        registry: &UsernameRegistry,
+        platform: &platform::Platform,
+        block_list_registry: &block_list::BlockListRegistry,
+        content: String,
+        options: vector<String>,
+        mut media_urls: Option<vector<vector<u8>>>,
+        mentions: Option<vector<address>>,
+        metadata_json: Option<String>,
+        betting_end_time: Option<u64>,
+        ctx: &mut TxContext
+    ) {
+        // Verify predictions are enabled
+        assert!(config.predictions_enabled, EPredictionDisabled);
+        
+        let owner = tx_context::sender(ctx);
+        
+        // Look up the profile ID for the sender
+        let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, owner);
+        assert!(option::is_some(&profile_id_option), EUnauthorized);
+        let profile_id = option::extract(&mut profile_id_option);
+        
+        // Check if platform is approved
+        assert!(platform::is_approved(platform), EUnauthorized);
+        
+        // Check if user has joined the platform
+        let profile_id_obj = object::id_from_address(profile_id);
+        assert!(platform::has_joined_platform(platform, profile_id_obj), EUserNotJoinedPlatform);
+        
+        // Check if the user is blocked by the platform
+        let platform_address = object::uid_to_address(platform::id(platform));
+        assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
+        
+        // Validate content length
+        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        
+        // Validate options
+        let options_length = vector::length(&options);
+        assert!(options_length > 0, EPredictionOptionsEmpty);
+        assert!(options_length <= MAX_PREDICTION_OPTIONS, EPredictionOptionsTooMany);
+        
+        // Validate metadata size if provided
+        if (option::is_some(&metadata_json)) {
+            let metadata_ref = option::borrow(&metadata_json);
+            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+        };
+        
+        // Convert and validate media URLs if provided
+        let media_option = if (option::is_some(&media_urls)) {
+            let urls_bytes = option::extract(&mut media_urls);
+            
+            // Validate media URLs count
+            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
+            
+            // Convert media URL bytes to Url
+            let mut urls = vector::empty<Url>();
+            let mut i = 0;
+            let len = vector::length(&urls_bytes);
+            while (i < len) {
+                let url_bytes = *vector::borrow(&urls_bytes, i);
+                vector::push_back(&mut urls, url::new_unsafe_from_bytes(url_bytes));
+                i = i + 1;
+            };
+            option::some(urls)
+        } else {
+            option::none<vector<Url>>()
+        };
+        
+        // Validate mentions if provided
+        if (option::is_some(&mentions)) {
+            let mentions_ref = option::borrow(&mentions);
+            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
+        };
+        
+        // Create the post with prediction type
+        let post_id = create_post_internal(
+            owner,
+            profile_id,
+            content,
+            media_option,
+            mentions,
+            metadata_json,
+            string::utf8(POST_TYPE_PREDICTION),
+            option::none(),
+            ctx
+        );
+        
+        // Create prediction options
+        let mut prediction_options = vector::empty<PredictionOption>();
+        let mut i = 0;
+        let options_len = vector::length(&options);
+        
+        while (i < options_len) {
+            let option_desc = *vector::borrow(&options, i);
+            
+            let prediction_option = PredictionOption {
+                id: (i as u8),
+                description: option_desc,
+                total_bet: 0
+            };
+            
+            vector::push_back(&mut prediction_options, prediction_option);
+            i = i + 1;
+        };
+        
+        // Create prediction data
+        let prediction_data = PredictionData {
+            id: object::new(ctx),
+            post_id,
+            options: prediction_options,
+            bets: vector::empty(),
+            resolved: false,
+            winning_option_id: option::none(),
+            betting_end_time,
+            total_bet_amount: 0,
+        };
+        
+        let prediction_data_id = object::uid_to_address(&prediction_data.id);
+        
+        // Extract just the descriptions for the event
+        let mut option_descriptions = vector::empty<String>();
+        i = 0;
+        while (i < options_len) {
+            let option = *vector::borrow(&prediction_options, i);
+            vector::push_back(&mut option_descriptions, option.description);
+            i = i + 1;
+        };
+        
+        // Emit prediction created event
+        event::emit(PredictionCreatedEvent {
+            post_id,
+            prediction_data_id,
+            owner,
+            profile_id,
+            content,
+            options: option_descriptions,
+            betting_end_time,
+        });
+        
+        // Emit standard post created event
+        event::emit(PostCreatedEvent {
+            post_id,
+            owner,
+            profile_id,
+            content,
+            post_type: string::utf8(POST_TYPE_PREDICTION),
+            parent_post_id: option::none(),
+            mentions,
+        });
+        
+        // Share prediction data
+        transfer::share_object(prediction_data);
+    }
+
+    /// Place a bet on a prediction post
+    public entry fun place_prediction_bet(
+        config: &PostConfig,
+        post: &Post,
+        prediction_data: &mut PredictionData,
+        option_id: u8,
+        coin: &mut Coin<MYS>,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        // Verify predictions are enabled
+        assert!(config.predictions_enabled, EPredictionDisabled);
+        
+        let bettor = tx_context::sender(ctx);
+        
+        // Verify this is a prediction post
+        assert!(string::utf8(POST_TYPE_PREDICTION) == post.post_type, ENotPredictionPost);
+        
+        // Verify post_id matches
+        assert!(object::uid_to_address(&post.id) == prediction_data.post_id, EInvalidParentReference);
+        
+        // Verify prediction is not resolved yet
+        assert!(!prediction_data.resolved, EPredictionAlreadyResolved);
+        
+        // Check if betting period has ended
+        if (option::is_some(&prediction_data.betting_end_time)) {
+            let end_time = *option::borrow(&prediction_data.betting_end_time);
+            assert!(tx_context::epoch(ctx) <= end_time, EPredictionBettingClosed);
+        };
+        
+        // Verify option_id is valid
+        let mut option_valid = false;
+        let mut option_index = 0;
+        let options_len = vector::length(&prediction_data.options);
+        
+        while (option_index < options_len) {
+            let option = vector::borrow_mut(&mut prediction_data.options, option_index);
+            if (option.id == option_id) {
+                option_valid = true;
+                
+                // Update total bet for this option
+                option.total_bet = option.total_bet + amount;
+                break
+            };
+            option_index = option_index + 1;
+        };
+        
+        assert!(option_valid, EPredictionOptionInvalid);
+        
+        // Take bet amount from user's coin
+        let bet_coin = coin::split(coin, amount, ctx);
+        
+        // Transfer bet to post owner (held until resolution)
+        transfer::public_transfer(bet_coin, post.owner);
+        
+        // Record bet
+        let bet = PredictionBet {
+            user: bettor,
+            option_id,
+            amount,
+            timestamp: tx_context::epoch(ctx),
+        };
+        
+        // Add bet to prediction data
+        vector::push_back(&mut prediction_data.bets, bet);
+        
+        // Update total bet amount
+        prediction_data.total_bet_amount = prediction_data.total_bet_amount + amount;
+        
+        // Emit bet placed event
+        event::emit(PredictionBetPlacedEvent {
+            post_id: prediction_data.post_id,
+            user: bettor,
+            option_id,
+            amount,
+        });
+    }
+
+    /// Withdraw a prediction bet with adjusted returns based on current odds
+    public entry fun withdraw_prediction_bet(
+        config: &PostConfig,
+        post: &Post,
+        prediction_data: &mut PredictionData,
+        repayment_coin: &mut Coin<MYS>,
+        ctx: &mut TxContext
+    ) {
+        // Verify predictions are enabled
+        assert!(config.predictions_enabled, EPredictionDisabled);
+        
+        let withdrawer = tx_context::sender(ctx);
+        
+        // Verify this is a prediction post
+        assert!(string::utf8(POST_TYPE_PREDICTION) == post.post_type, ENotPredictionPost);
+        
+        // Verify post_id matches
+        assert!(object::uid_to_address(&post.id) == prediction_data.post_id, EInvalidParentReference);
+        
+        // Verify prediction is not resolved yet
+        assert!(!prediction_data.resolved, EPredictionAlreadyResolved);
+        
+        // Check if betting period has ended
+        if (option::is_some(&prediction_data.betting_end_time)) {
+            let end_time = *option::borrow(&prediction_data.betting_end_time);
+            assert!(tx_context::epoch(ctx) <= end_time, EPredictionBettingClosed);
+        };
+        
+        // Find the user's bet
+        let bets_len = vector::length(&prediction_data.bets);
+        let mut bet_index = 0;
+        let mut found_bet = false;
+        let mut user_bet_amount = 0;
+        let mut user_option_id = 0;
+        
+        while (bet_index < bets_len) {
+            let bet = vector::borrow(&prediction_data.bets, bet_index);
+            if (bet.user == withdrawer) {
+                user_bet_amount = bet.amount;
+                user_option_id = bet.option_id;
+                found_bet = true;
+                break
+            };
+            bet_index = bet_index + 1;
+        };
+        
+        // Ensure the user has a bet to withdraw
+        assert!(found_bet, EUnauthorized);
+        
+        // Calculate the current odds and determine the fair withdrawal amount
+        
+        // Get the total amount bet across all options
+        let total_bet_amount = prediction_data.total_bet_amount;
+        
+        // Get the current amount bet on user's chosen option
+        let mut user_option_total_bet = 0;
+        let options_len = vector::length(&prediction_data.options);
+        let mut option_index = 0;
+        
+        while (option_index < options_len) {
+            let option = vector::borrow(&prediction_data.options, option_index);
+            if (option.id == user_option_id) {
+                user_option_total_bet = option.total_bet;
+                break
+            };
+            option_index = option_index + 1;
+        };
+        
+        // Calculate the fair withdrawal amount based on current odds
+        // Formula: withdrawal_amount = user_bet_amount * (total_bet_amount - user_bet_amount) / (total_bet_amount)
+        
+        // Remove the user's bet from the calculation to get actual current market
+        let adjusted_total_bet = total_bet_amount - user_bet_amount;
+        let adjusted_option_bet = user_option_total_bet - user_bet_amount;
+        
+        // Calculate the withdrawal amount (using proportion of current odds)
+        let mut withdrawal_amount = user_bet_amount;
+        
+        // Only adjust if there are other bets in the market
+        if (adjusted_total_bet > 0) {
+            // Calculate fair value based on current odds
+            // This formula ensures users get less if odds worsened, more if odds improved
+            withdrawal_amount = (((user_bet_amount as u128) * (adjusted_total_bet as u128)) / 
+                (adjusted_total_bet as u128)) as u64;
+        };
+        
+        // Ensure there's enough balance in the repayment coin
+        assert!(coin::value(repayment_coin) >= withdrawal_amount, EInvalidTipAmount);
+        
+        // Update prediction data
+        // 1. Decrease the total bet amount
+        prediction_data.total_bet_amount = prediction_data.total_bet_amount - user_bet_amount;
+        
+        // 2. Decrease the option's total bet amount
+        option_index = 0;
+        while (option_index < options_len) {
+            let option = vector::borrow_mut(&mut prediction_data.options, option_index);
+            if (option.id == user_option_id) {
+                option.total_bet = option.total_bet - user_bet_amount;
+                break
+            };
+            option_index = option_index + 1;
+        };
+        
+        // 3. Remove the bet from the vector
+        if (bet_index < bets_len - 1) {
+            // If not the last element, swap with last and pop
+            vector::swap(&mut prediction_data.bets, bet_index, bets_len - 1);
+        };
+        vector::pop_back(&mut prediction_data.bets);
+        
+        // Transfer the withdrawal amount to the user
+        let withdrawal_coin = coin::split(repayment_coin, withdrawal_amount, ctx);
+        transfer::public_transfer(withdrawal_coin, withdrawer);
+        
+        // Emit prediction bet withdrawn event
+        event::emit(PredictionBetWithdrawnEvent {
+            post_id: prediction_data.post_id,
+            user: withdrawer,
+            option_id: user_option_id,
+            original_amount: user_bet_amount,
+            withdrawal_amount,
+        });
+    }
+
+    /// Resolve a prediction (admin only) and distribute winnings
+    public entry fun resolve_prediction(
+        config: &PostConfig,
+        _admin_cap: &PredictionAdminCap,
+        post: &Post,
+        prediction_data: &mut PredictionData,
+        winning_option_id: u8,
+        payout_funds: &mut Coin<MYS>,
+        ctx: &mut TxContext
+    ) {
+        // Verify predictions are enabled
+        assert!(config.predictions_enabled, EPredictionDisabled);
+        
+        // Verify this is a prediction post
+        assert!(string::utf8(POST_TYPE_PREDICTION) == post.post_type, ENotPredictionPost);
+        
+        // Verify post_id matches
+        assert!(object::uid_to_address(&post.id) == prediction_data.post_id, EInvalidParentReference);
+        
+        // Verify prediction is not already resolved
+        assert!(!prediction_data.resolved, EPredictionAlreadyResolved);
+        
+        // Verify option_id is valid
+        let mut option_valid = false;
+        let mut option_index = 0;
+        let options_len = vector::length(&prediction_data.options);
+        let mut winning_amount = 0;
+        
+        while (option_index < options_len) {
+            let option = vector::borrow(&prediction_data.options, option_index);
+            if (option.id == winning_option_id) {
+                option_valid = true;
+                winning_amount = option.total_bet;
+                break
+            };
+            option_index = option_index + 1;
+        };
+        
+        assert!(option_valid, EPredictionOptionInvalid);
+        
+        // Mark prediction as resolved
+        prediction_data.resolved = true;
+        prediction_data.winning_option_id = option::some(winning_option_id);
+        
+        // Emit prediction resolved event
+        event::emit(PredictionResolvedEvent {
+            post_id: prediction_data.post_id,
+            winning_option_id,
+            total_bet_amount: prediction_data.total_bet_amount,
+            winning_amount,
+            resolved_by: tx_context::sender(ctx),
+        });
+        
+        // Distribute all winnings automatically
+        
+        // Calculate platform fee
+        let total_bet_amount = prediction_data.total_bet_amount;
+        let fee_amount = (total_bet_amount * config.prediction_fee_bps) / 10000;
+        let distributable_amount = total_bet_amount - fee_amount;
+        
+        // Get all winners and their bet amounts
+        let mut winners = vector::empty<address>();
+        let mut winner_amounts = vector::empty<u64>();
+        let mut winner_payouts = vector::empty<u64>();
+        let mut total_payout = 0;
+        
+        let mut i = 0;
+        let bets_len = vector::length(&prediction_data.bets);
+        
+        // First pass - identify winners and their bet amounts
+        while (i < bets_len) {
+            let bet = vector::borrow(&prediction_data.bets, i);
+            if (bet.option_id == winning_option_id) {
+                let winner = bet.user;
+                let bet_amount = bet.amount;
+                
+                // Check if this user is already in the winners list
+                let mut found = false;
+                let mut winner_index = 0;
+                let winners_len = vector::length(&winners);
+                
+                while (winner_index < winners_len && !found) {
+                    if (*vector::borrow(&winners, winner_index) == winner) {
+                        found = true;
+                        // Add to their existing bet amount
+                        let current_amount = vector::borrow_mut(&mut winner_amounts, winner_index);
+                        *current_amount = *current_amount + bet_amount;
+                    };
+                    winner_index = winner_index + 1;
+                };
+                
+                if (!found) {
+                    // Add new winner
+                    vector::push_back(&mut winners, winner);
+                    vector::push_back(&mut winner_amounts, bet_amount);
+                };
+            };
+            i = i + 1;
+        };
+        
+        // Calculate payouts based on proportion of winning bets
+        i = 0;
+        let winners_len = vector::length(&winners);
+        
+        // Calculate payout ratios
+        while (i < winners_len) {
+            let bet_amount = *vector::borrow(&winner_amounts, i);
+            // Calculate payout based on proportion of winning bets
+            let payout = if (winning_amount == 0) {
+                0 // Avoid division by zero
+            } else {
+                (((bet_amount as u128) * (distributable_amount as u128)) / (winning_amount as u128)) as u64
+            };
+            
+            vector::push_back(&mut winner_payouts, payout);
+            total_payout = total_payout + payout;
+            i = i + 1;
+        };
+        
+        // Ensure we have enough funds to distribute, including fee
+        assert!(coin::value(payout_funds) >= total_bet_amount, EInvalidTipAmount);
+        
+        // First send the platform fee if applicable
+        if (fee_amount > 0) {
+            let fee_coin = coin::split(payout_funds, fee_amount, ctx);
+            transfer::public_transfer(fee_coin, config.prediction_treasury);
+        };
+        
+        // Distribute to all winners
+        i = 0;
+        
+        while (i < winners_len) {
+            let winner = *vector::borrow(&winners, i);
+            let amount = *vector::borrow(&winner_payouts, i);
+            
+            if (amount > 0) {
+                let payment = coin::split(payout_funds, amount, ctx);
+                transfer::public_transfer(payment, winner);
+                
+                // Emit payout event
+                event::emit(PredictionPayoutEvent {
+                    post_id: prediction_data.post_id,
+                    user: winner, 
+                    amount,
+                });
+            };
+            
+            i = i + 1;
+        };
+    }
+
     /// Internal function to create a post and return its ID
     fun create_post_internal(
         owner: address,
@@ -322,6 +994,8 @@ module social_contracts::post {
     /// Create a new post
     public entry fun create_post(
         registry: &UsernameRegistry,
+        platform: &platform::Platform,
+        block_list_registry: &block_list::BlockListRegistry,
         content: String,
         mut media_urls: Option<vector<vector<u8>>>,
         mentions: Option<vector<address>>,
@@ -334,6 +1008,17 @@ module social_contracts::post {
         let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, owner);
         assert!(option::is_some(&profile_id_option), EUnauthorized);
         let profile_id = option::extract(&mut profile_id_option);
+        
+        // Check if platform is approved
+        assert!(platform::is_approved(platform), EUnauthorized);
+        
+        // Check if user has joined the platform
+        let profile_id_obj = object::id_from_address(profile_id);
+        assert!(platform::has_joined_platform(platform, profile_id_obj), EUserNotJoinedPlatform);
+        
+        // Check if the user is blocked by the platform
+        let platform_address = object::uid_to_address(platform::id(platform));
+        assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
         
         // Validate content length
         assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
@@ -530,6 +1215,8 @@ module social_contracts::post {
     /// If content is empty/none, it's treated as a standard repost
     public entry fun create_repost(
         registry: &UsernameRegistry,
+        platform: &platform::Platform,
+        block_list_registry: &block_list::BlockListRegistry,
         original_post: &mut Post,
         mut content: Option<String>,
         mut media_urls: Option<vector<vector<u8>>>,
@@ -543,6 +1230,17 @@ module social_contracts::post {
         let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, owner);
         assert!(option::is_some(&profile_id_option), EUnauthorized);
         let profile_id = option::extract(&mut profile_id_option);
+        
+        // Check if platform is approved
+        assert!(platform::is_approved(platform), EUnauthorized);
+        
+        // Check if user has joined the platform
+        let profile_id_obj = object::id_from_address(profile_id);
+        assert!(platform::has_joined_platform(platform, profile_id_obj), EUserNotJoinedPlatform);
+        
+        // Check if the user is blocked by the platform
+        let platform_address = object::uid_to_address(platform::id(platform));
+        assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
         
         let original_post_id = object::uid_to_address(&original_post.id);
         
@@ -1417,5 +2115,165 @@ module social_contracts::post {
     /// Get the tips received for a post
     public fun get_tips_received(post: &Post): u64 {
         post.tips_received
+    }
+
+    /// Get total bet amount for a prediction
+    public fun get_total_bet_amount(prediction_data: &PredictionData): u64 {
+        prediction_data.total_bet_amount
+    }
+    
+    /// Get number of bets for a prediction
+    public fun get_bets_count(prediction_data: &PredictionData): u64 {
+        vector::length(&prediction_data.bets)
+    }
+    
+    /// Get bet user at index
+    public fun get_bet_user(prediction_data: &PredictionData, index: u64): address {
+        let bet = vector::borrow(&prediction_data.bets, index);
+        bet.user
+    }
+    
+    /// Get bet option id at index
+    public fun get_bet_option_id(prediction_data: &PredictionData, index: u64): u8 {
+        let bet = vector::borrow(&prediction_data.bets, index);
+        bet.option_id
+    }
+    
+    /// Get bet amount at index
+    public fun get_bet_amount(prediction_data: &PredictionData, index: u64): u64 {
+        let bet = vector::borrow(&prediction_data.bets, index);
+        bet.amount
+    }
+
+    /// Test-only initialization function
+    #[test_only]
+    public fun test_init(ctx: &mut TxContext) {
+        // Create and share post configuration with predictions enabled for testing
+        transfer::share_object(
+            PostConfig {
+                id: object::new(ctx),
+                predictions_enabled: true, // Enable predictions for testing
+                prediction_fee_bps: 500, // Default 5% fee
+                prediction_treasury: tx_context::sender(ctx), // Set to sender
+            }
+        );
+        
+        // Create and transfer the admin capability for testing
+        let admin_cap = PredictionAdminCap {
+            id: object::new(ctx),
+        };
+        
+        transfer::public_transfer(admin_cap, tx_context::sender(ctx));
+    }
+    
+    /// Test-only function to create a post directly for testing
+    #[test_only]
+    public fun test_create_post(
+        owner: address,
+        profile_id: address,
+        content: String,
+        ctx: &mut TxContext
+    ): address {
+        create_post_internal(
+            owner,
+            profile_id,
+            content,
+            option::none(), // No media
+            option::none(), // No mentions
+            option::none(), // No metadata
+            string::utf8(POST_TYPE_STANDARD), // Standard post type
+            option::none(), // No parent post
+            ctx
+        )
+    }
+    
+    /// Test-only function to create a prediction post directly for testing
+    #[test_only]
+    public fun test_create_prediction_post(
+        owner: address,
+        profile_id: address,
+        content: String,
+        options: vector<String>,
+        betting_end_time: Option<u64>,
+        ctx: &mut TxContext
+    ): (address, address) {
+        // Create the post with prediction type
+        let post_id = create_post_internal(
+            owner,
+            profile_id,
+            content,
+            option::none(), // No media
+            option::none(), // No mentions
+            option::none(), // No metadata
+            string::utf8(POST_TYPE_PREDICTION), // Prediction post type
+            option::none(), // No parent post
+            ctx
+        );
+        
+        // Create prediction options
+        let mut prediction_options = vector::empty<PredictionOption>();
+        let mut i = 0;
+        let options_len = vector::length(&options);
+        
+        while (i < options_len) {
+            let option_desc = *vector::borrow(&options, i);
+            
+            let prediction_option = PredictionOption {
+                id: (i as u8),
+                description: option_desc,
+                total_bet: 0
+            };
+            
+            vector::push_back(&mut prediction_options, prediction_option);
+            i = i + 1;
+        };
+        
+        // Create prediction data
+        let prediction_data = PredictionData {
+            id: object::new(ctx),
+            post_id,
+            options: prediction_options,
+            bets: vector::empty(),
+            resolved: false,
+            winning_option_id: option::none(),
+            betting_end_time,
+            total_bet_amount: 0,
+        };
+        
+        let prediction_data_id = object::uid_to_address(&prediction_data.id);
+        
+        // Emit prediction created event
+        event::emit(PredictionCreatedEvent {
+            post_id,
+            prediction_data_id,
+            owner,
+            profile_id,
+            content,
+            options,
+            betting_end_time,
+        });
+        
+        // Share prediction data
+        transfer::share_object(prediction_data);
+        
+        (post_id, prediction_data_id)
+    }
+    
+    /// Test-only function to get the admin cap ID
+    #[test_only]
+    public fun test_get_admin_cap(
+        ctx: &mut TxContext
+    ): address {
+        // Create a new admin cap for testing
+        let admin_cap = PredictionAdminCap {
+            id: object::new(ctx),
+        };
+        
+        let admin_cap_id = object::uid_to_address(&admin_cap.id);
+        
+        // Transfer to sender
+        transfer::public_transfer(admin_cap, tx_context::sender(ctx));
+        
+        admin_cap_id
     }
 }

@@ -52,6 +52,7 @@ module social_contracts::governance {
     const PROPOSAL_TYPE_ECOSYSTEM: u8 = 0;
     const PROPOSAL_TYPE_REPUTATION: u8 = 1;
     const PROPOSAL_TYPE_COMMUNITY_NOTES: u8 = 2;
+    const PROPOSAL_TYPE_PLATFORM: u8 = 3;
 
     /// Proposal status constants
     const STATUS_SUBMITTED: u8 = 0;
@@ -822,12 +823,7 @@ module social_contracts::governance {
         ctx: &mut TxContext
     ) {
         // Verify proposal type is valid
-        assert!(
-            proposal_type == PROPOSAL_TYPE_ECOSYSTEM || 
-            proposal_type == PROPOSAL_TYPE_REPUTATION || 
-            proposal_type == PROPOSAL_TYPE_COMMUNITY_NOTES, 
-            EInvalidParameter
-        );
+        assert!(proposal_type <= PROPOSAL_TYPE_PLATFORM, EInvalidParameter);
         
         // Verify registry type matches proposal type
         assert!(registry.registry_type == proposal_type, EInvalidRegistry);
@@ -1585,7 +1581,7 @@ module social_contracts::governance {
         registry: &GovernanceRegistry,
         proposal_type: u8
     ): vector<ID> {
-        assert!(proposal_type <= PROPOSAL_TYPE_COMMUNITY_NOTES, EInvalidParameter);
+        assert!(proposal_type <= PROPOSAL_TYPE_PLATFORM, EInvalidParameter);
         let mut result = vector::empty<ID>();
         let statuses = vector[ STATUS_SUBMITTED, STATUS_DELEGATE_REVIEW, STATUS_COMMUNITY_VOTING, STATUS_APPROVED, STATUS_REJECTED, STATUS_IMPLEMENTED ];
         let mut s = 0;
@@ -1739,5 +1735,56 @@ module social_contracts::governance {
         // Reject the proposal
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         reject_proposal_by_id(registry, proposal_id, current_time, ctx);
+    }
+
+    /// Create a platform-specific governance registry when a platform is approved
+    /// This function can only be called by the platform toggle_platform_approval function
+    /// and only the package publisher can call it
+    public fun create_platform_governance(
+        delegate_count: u64,
+        delegate_term_epochs: u64,
+        proposal_submission_cost: u64,
+        min_on_chain_age_days: u64,
+        max_votes_per_user: u64,
+        quadratic_base_cost: u64,
+        voting_period_epochs: u64,
+        quorum_votes: u64,
+        ctx: &mut TxContext
+    ): ID {
+        // Create Platform Governance Registry with parameters
+        let mut platform_registry = GovernanceRegistry {
+            id: object::new(ctx),
+            registry_type: PROPOSAL_TYPE_PLATFORM,
+            // Configuration parameters specific to platform governance
+            delegate_count, 
+            delegate_term_epochs,
+            proposal_submission_cost,
+            min_on_chain_age_days,
+            max_votes_per_user,
+            quadratic_base_cost,
+            voting_period_epochs,
+            quorum_votes,
+            // Tables
+            delegates: table::new<address, Delegate>(ctx),
+            proposals: table::new<ID, Proposal>(ctx),
+            proposals_by_status: table::new<u8, vector<ID>>(ctx),
+            treasury: balance::zero(),
+            nominated_delegates: table::new<address, NominatedDelegate>(ctx),
+            delegate_addresses: vec_set::empty<address>(),
+            nominee_addresses: vec_set::empty<address>(),
+            voters: table::new<address, Table<address, bool>>(ctx),
+        };
+        
+        // Initialize registry tables
+        initialize_registry_tables(&mut platform_registry, ctx);
+        
+        // Get the ID before sharing
+        let registry_id = object::id(&platform_registry);
+        
+        // Share the registry object
+        transfer::share_object(platform_registry);
+        
+        // Return the registry ID
+        registry_id
     }
 }

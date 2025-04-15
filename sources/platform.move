@@ -24,6 +24,7 @@ module social_contracts::platform {
     
     use social_contracts::profile;
     use social_contracts::post;
+    use social_contracts::governance;
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -87,6 +88,19 @@ module social_contracts::platform {
         treasury: Balance<MYS>,
         /// Whether the platform is approved by the contract owner
         approved: bool,
+        /// Whether the platform wants DAO governance
+        wants_dao_governance: bool,
+        /// DAO governance configuration parameters (all optional)
+        delegate_count: Option<u64>,
+        delegate_term_epochs: Option<u64>,
+        proposal_submission_cost: Option<u64>,
+        min_on_chain_age_days: Option<u64>,
+        max_votes_per_user: Option<u64>,
+        quadratic_base_cost: Option<u64>,
+        voting_period_epochs: Option<u64>,
+        quorum_votes: Option<u64>,
+        /// ID of governance registry if created
+        governance_registry_id: Option<ID>,
     }
 
     /// Platform registry that keeps track of all platforms
@@ -206,6 +220,15 @@ module social_contracts::platform {
         links: vector<String>,
         status: u8,
         release_date: String,
+        wants_dao_governance: bool,
+        delegate_count: Option<u64>,
+        delegate_term_epochs: Option<u64>,
+        proposal_submission_cost: Option<u64>,
+        min_on_chain_age_days: Option<u64>,
+        max_votes_per_user: Option<u64>,
+        quadratic_base_cost: Option<u64>,
+        voting_period_epochs: Option<u64>,
+        quorum_votes: Option<u64>,
         ctx: &mut TxContext
     ) {
         let platform_id = object::new(ctx);
@@ -214,6 +237,16 @@ module social_contracts::platform {
 
         // Check if platform name is already taken
         assert!(!table::contains(&registry.platforms_by_name, name), EPlatformAlreadyExists);
+
+        // If DAO governance is not wanted, set all governance parameters to None
+        let actual_delegate_count = if (wants_dao_governance) delegate_count else option::none();
+        let actual_delegate_term_epochs = if (wants_dao_governance) delegate_term_epochs else option::none();
+        let actual_proposal_submission_cost = if (wants_dao_governance) proposal_submission_cost else option::none();
+        let actual_min_on_chain_age_days = if (wants_dao_governance) min_on_chain_age_days else option::none();
+        let actual_max_votes_per_user = if (wants_dao_governance) max_votes_per_user else option::none();
+        let actual_quadratic_base_cost = if (wants_dao_governance) quadratic_base_cost else option::none();
+        let actual_voting_period_epochs = if (wants_dao_governance) voting_period_epochs else option::none();
+        let actual_quorum_votes = if (wants_dao_governance) quorum_votes else option::none();
 
         let mut platform = Platform {
             id: platform_id,
@@ -232,6 +265,16 @@ module social_contracts::platform {
             created_at: now,
             treasury: balance::zero(),
             approved: false, // New platforms are not approved by default
+            wants_dao_governance,
+            delegate_count: actual_delegate_count,
+            delegate_term_epochs: actual_delegate_term_epochs,
+            proposal_submission_cost: actual_proposal_submission_cost,
+            min_on_chain_age_days: actual_min_on_chain_age_days,
+            max_votes_per_user: actual_max_votes_per_user,
+            quadratic_base_cost: actual_quadratic_base_cost,
+            voting_period_epochs: actual_voting_period_epochs,
+            quorum_votes: actual_quorum_votes,
+            governance_registry_id: option::none(),
         };
         
         // Create empty moderators set
@@ -473,11 +516,81 @@ module social_contracts::platform {
         publisher: &Publisher,
         ctx: &mut TxContext
     ) {
+        use social_contracts::governance;
+        
         // Verify caller has a valid publisher for this module
         assert!(package::from_module<Platform>(publisher), ENotContractOwner);
         
         // Toggle approval status
         platform.approved = !platform.approved;
+        
+        // If platform is now approved and wants DAO governance, create governance registry
+        if (platform.approved && platform.wants_dao_governance && option::is_none(&platform.governance_registry_id)) {
+            // Use default values if options are None
+            let delegate_count = if (option::is_some(&platform.delegate_count)) {
+                *option::borrow(&platform.delegate_count)
+            } else {
+                7 // Default value
+            };
+            
+            let delegate_term_epochs = if (option::is_some(&platform.delegate_term_epochs)) {
+                *option::borrow(&platform.delegate_term_epochs)
+            } else {
+                30 // Default value
+            };
+            
+            let proposal_submission_cost = if (option::is_some(&platform.proposal_submission_cost)) {
+                *option::borrow(&platform.proposal_submission_cost)
+            } else {
+                50_000_000 // Default value
+            };
+            
+            let min_on_chain_age_days = if (option::is_some(&platform.min_on_chain_age_days)) {
+                *option::borrow(&platform.min_on_chain_age_days)
+            } else {
+                7 // Default value
+            };
+            
+            let max_votes_per_user = if (option::is_some(&platform.max_votes_per_user)) {
+                *option::borrow(&platform.max_votes_per_user)
+            } else {
+                5 // Default value
+            };
+            
+            let quadratic_base_cost = if (option::is_some(&platform.quadratic_base_cost)) {
+                *option::borrow(&platform.quadratic_base_cost)
+            } else {
+                5_000_000 // Default value
+            };
+            
+            let voting_period_epochs = if (option::is_some(&platform.voting_period_epochs)) {
+                *option::borrow(&platform.voting_period_epochs)
+            } else {
+                3 // Default value
+            };
+            
+            let quorum_votes = if (option::is_some(&platform.quorum_votes)) {
+                *option::borrow(&platform.quorum_votes)
+            } else {
+                15 // Default value
+            };
+            
+            // Create governance registry for this platform
+            let registry_id = governance::create_platform_governance(
+                delegate_count,
+                delegate_term_epochs,
+                proposal_submission_cost,
+                min_on_chain_age_days,
+                max_votes_per_user,
+                quadratic_base_cost,
+                voting_period_epochs,
+                quorum_votes,
+                ctx
+            );
+            
+            // Store registry ID in the platform
+            platform.governance_registry_id = option::some(registry_id);
+        };
         
         // Emit approval status changed event
         event::emit(PlatformApprovalChangedEvent {
@@ -745,6 +858,70 @@ module social_contracts::platform {
         vec_set::into_keys(*blocked_profiles)
     }
 
+    /// Check if platform wants DAO governance
+    public fun wants_dao_governance(platform: &Platform): bool {
+        platform.wants_dao_governance
+    }
+
+    /// Get platform's governance registry ID if available
+    public fun governance_registry_id(platform: &Platform): &Option<ID> {
+        &platform.governance_registry_id
+    }
+
+    /// Get platform's governance parameters
+    public fun governance_parameters(platform: &Platform): (Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
+        (
+            platform.delegate_count,
+            platform.delegate_term_epochs,
+            platform.proposal_submission_cost,
+            platform.min_on_chain_age_days,
+            platform.max_votes_per_user,
+            platform.quadratic_base_cost,
+            platform.voting_period_epochs,
+            platform.quorum_votes
+        )
+    }
+
+    /// Create a new platform with DAO governance enabled and default governance parameters
+    public entry fun create_platform_with_dao(
+        registry: &mut PlatformRegistry,
+        name: String,
+        tagline: String,
+        description: String,
+        logo_url: String,
+        terms_of_service: String,
+        privacy_policy: String,
+        platforms: vector<String>,
+        links: vector<String>,
+        status: u8,
+        release_date: String,
+        ctx: &mut TxContext
+    ) {
+        create_platform(
+            registry,
+            name,
+            tagline,
+            description,
+            logo_url,
+            terms_of_service,
+            privacy_policy,
+            platforms,
+            links,
+            status,
+            release_date,
+            true, // wants_dao_governance is true
+            option::some(7), // delegate_count
+            option::some(30), // delegate_term_epochs
+            option::some(50_000_000), // proposal_submission_cost
+            option::some(7), // min_on_chain_age_days
+            option::some(5), // max_votes_per_user
+            option::some(5_000_000), // quadratic_base_cost
+            option::some(3), // voting_period_epochs
+            option::some(15), // quorum_votes
+            ctx
+        )
+    }
+
     #[test_only]
     /// Initialize test environment for platform module
     public fun test_init(ctx: &mut TxContext) {
@@ -755,5 +932,30 @@ module social_contracts::platform {
         };
 
         transfer::share_object(registry);
+    }
+    
+    #[test_only]
+    /// Test helper to directly set a profile as joined to a platform
+    /// Simplifies testing by bypassing the normal join flow
+    public fun test_join_platform(platform: &mut Platform, profile_id: ID) {
+        // Create joined profiles set if it doesn't exist
+        if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
+            let joined_profiles = vec_set::empty<ID>();
+            dynamic_field::add(&mut platform.id, JOINED_PROFILES_FIELD, joined_profiles);
+        };
+        
+        // Get joined profiles set
+        let joined_profiles = dynamic_field::borrow_mut<vector<u8>, VecSet<ID>>(&mut platform.id, JOINED_PROFILES_FIELD);
+        
+        // Add profile to joined profiles
+        if (!vec_set::contains(joined_profiles, &profile_id)) {
+            vec_set::insert(joined_profiles, profile_id);
+        };
+    }
+    
+    #[test_only]
+    /// Test helper to set the approval status of a platform
+    public fun test_set_approval(platform: &mut Platform, approved: bool) {
+        platform.approved = approved;
     }
 }
