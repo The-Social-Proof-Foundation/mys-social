@@ -1,16 +1,12 @@
-// Copyright (c) MySocial, Inc.
+// Copyright (c) The Social Proof Foundation LLC
 // SPDX-License-Identifier: Apache-2.0
 
 /// Module to manage package upgrades for MySocialContracts.
 /// Provides versioning support for all shared objects.
-#[allow(duplicate_alias)]
+
 module social_contracts::upgrade {
-    use std::vector;
     use std::string::String;
-    use mys::object::{Self, ID};
     use mys::package;
-    use mys::transfer;
-    use mys::tx_context;
     use mys::event;
     
     // Error codes

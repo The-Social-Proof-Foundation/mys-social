@@ -6,16 +6,11 @@
 /// and post tokens using an Automated Market Maker (AMM) with a quadratic pricing curve.
 /// It includes fee distribution mechanisms for transactions, splitting between profile owner,
 /// platform, and ecosystem treasury.
-#[allow(unused_use, duplicate_alias, unused_const, unused_field, deprecated_usage)]
+
+#[allow(unused_field, deprecated_usage, unused_const)]
 module social_contracts::token_exchange {
     use std::string::{Self, String};
-    use std::ascii;
-    use std::vector;
-    use std::option::{Self, Option};
-    
-    use mys::object::{Self, UID, ID};
-    use mys::tx_context::{Self, TxContext};
-    use mys::transfer;
+
     use mys::event;
     use mys::table::{Self, Table};
     use mys::coin::{Self, Coin};
@@ -26,7 +21,7 @@ module social_contracts::token_exchange {
     
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::post::{Self, Post};
-    use social_contracts::block_list::{Self, BlockListRegistry};
+    use social_contracts::block_list::{BlockListRegistry};
     use social_contracts::upgrade::{Self, AdminCap as UpgradeAdminCap};
 
     // === Error codes ===

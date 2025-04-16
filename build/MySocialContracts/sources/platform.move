@@ -3,27 +3,20 @@
 
 /// Platform module for the MySocial network
 /// Manages social media platforms and their timelines
-#[allow(unused_use, duplicate_alias, unused_const)]
+
 module social_contracts::platform {
     use std::string::{Self, String};
-    use std::vector;
-    use std::option;
     
     use mys::dynamic_field;
     use mys::vec_set::{Self, VecSet};
-    use mys::tx_context::{Self, TxContext};
-    use mys::object::{Self, UID, ID};
-    use mys::event;
-    use mys::transfer;
     use mys::table::{Self, Table};
     use mys::coin::{Self, Coin};
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
-    use mys::url;
     use mys::package::{Self, Publisher};
+    use mys::event;
     
     use social_contracts::profile;
-    use social_contracts::post;
     use social_contracts::governance;
     use social_contracts::upgrade;
 
@@ -33,12 +26,12 @@ module social_contracts::platform {
     const EAlreadyBlocked: u64 = 2;
     const ENotBlocked: u64 = 3;
     const EInvalidTokenAmount: u64 = 4;
-    const ENotContractOwner: u64 = 7;
-    const EAlreadyJoined: u64 = 8;
-    const ENotJoined: u64 = 9;
-    const EWrongVersion: u64 = 10;
-    const EInsufficientTreasuryFunds: u64 = 11;
-    const EEmptyRecipientsList: u64 = 12;
+    const ENotContractOwner: u64 = 5;
+    const EAlreadyJoined: u64 = 6;
+    const ENotJoined: u64 = 7;
+    const EWrongVersion: u64 = 8;
+    const EInsufficientTreasuryFunds: u64 = 9;
+    const EEmptyRecipientsList: u64 = 10;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -259,6 +252,18 @@ module social_contracts::platform {
 
         // Check if platform name is already taken
         assert!(!table::contains(&registry.platforms_by_name, name), EPlatformAlreadyExists);
+
+        // Validate status code is one of the defined constants
+        assert!(
+            status == STATUS_DEVELOPMENT || 
+            status == STATUS_ALPHA || 
+            status == STATUS_BETA || 
+            status == STATUS_LIVE || 
+            status == STATUS_MAINTENANCE || 
+            status == STATUS_SUNSET || 
+            status == STATUS_SHUTDOWN,
+            EUnauthorized
+        );
 
         // If DAO governance is not wanted, set all governance parameters to None
         let actual_delegate_count = if (wants_dao_governance) delegate_count else option::none();
@@ -562,8 +567,6 @@ module social_contracts::platform {
         publisher: &Publisher,
         ctx: &mut TxContext
     ) {
-        use social_contracts::governance;
-        
         // Verify caller has a valid publisher for this module
         assert!(package::from_module<Platform>(publisher), ENotContractOwner);
         
@@ -644,6 +647,28 @@ module social_contracts::platform {
             approved: platform.approved,
             changed_by: tx_context::sender(ctx),
         });
+    }
+
+    /// Create a new platform status
+    public fun new_status(status: u8): PlatformStatus {
+        // Validate the status code is one of the defined constants
+        assert!(
+            status == STATUS_DEVELOPMENT || 
+            status == STATUS_ALPHA || 
+            status == STATUS_BETA || 
+            status == STATUS_LIVE || 
+            status == STATUS_MAINTENANCE || 
+            status == STATUS_SUNSET || 
+            status == STATUS_SHUTDOWN,
+            EUnauthorized
+        );
+        
+        PlatformStatus { status }
+    }
+    
+    /// Get the status value
+    public fun status_value(status: &PlatformStatus): u8 {
+        status.status
     }
 
     /// Join a platform - establishes initial connection between profile and platform
@@ -807,16 +832,6 @@ module social_contracts::platform {
     /// Get platform links
     public fun get_links(platform: &Platform): &vector<String> {
         &platform.links
-    }
-
-    /// Create a new platform status
-    public fun new_status(status: u8): PlatformStatus {
-        PlatformStatus { status }
-    }
-
-    /// Get platform status value
-    public fun status_value(status: &PlatformStatus): u8 {
-        status.status
     }
 
     /// Get platform status

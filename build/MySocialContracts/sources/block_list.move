@@ -3,11 +3,8 @@
 
 /// Block list module for the MySocial network
 /// Manages user blocking between wallet addresses
-#[allow(duplicate_alias)]
+
 module social_contracts::block_list {
-    use mys::object;
-    use mys::tx_context;
-    use mys::transfer;
     use mys::event;
     use mys::table::{Self, Table};
     use mys::vec_set::{Self, VecSet};

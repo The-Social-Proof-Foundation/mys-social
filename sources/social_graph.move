@@ -3,16 +3,11 @@
 
 /// Social graph module for the MySocial network
 /// Manages social relationships between users (following/followers)
-#[allow(duplicate_alias, unused_use, unused_const)]
+
 module social_contracts::social_graph {
-    use std::vector;
-    use std::option;
-    use std::string::{Self, String};
+    use std::string;
     
-    use mys::object::{Self, UID};
-    use mys::tx_context::{Self, TxContext};
     use mys::event;
-    use mys::transfer;
     use mys::table::{Self, Table};
     use mys::vec_set::{Self, VecSet};
     
@@ -20,12 +15,11 @@ module social_contracts::social_graph {
     use social_contracts::upgrade;
 
     /// Error codes
-    const EUnauthorized: u64 = 0;
-    const EAlreadyFollowing: u64 = 1;
-    const ENotFollowing: u64 = 2;
-    const ECannotFollowSelf: u64 = 3;
-    const EProfileNotFound: u64 = 4;
-    const EWrongVersion: u64 = 5;
+    const EAlreadyFollowing: u64 = 0;
+    const ENotFollowing: u64 = 1;
+    const ECannotFollowSelf: u64 = 2;
+    const EProfileNotFound: u64 = 3;
+    const EWrongVersion: u64 = 4;
 
     /// Global social graph object that tracks relationships between users
     public struct SocialGraph has key {

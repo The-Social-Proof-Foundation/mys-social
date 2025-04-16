@@ -3,52 +3,53 @@
 
 /// Post module for the MySocial network
 /// Handles creation and management of posts and comments
-#[allow(unused_const, duplicate_alias, unused_use, unused_variable)]
+/// Implements features like comments, reposts, quotes, and predictions
+
 module social_contracts::post {
     use std::string::{Self, String};
-    use std::vector;
-    use std::option::{Self, Option};
     
-    use mys::object::{Self, UID, ID};
-    use mys::tx_context::{Self, TxContext};
     use mys::event;
-    use mys::transfer;
     use mys::table::{Self, Table};
     use mys::coin::{Self, Coin};
     use mys::mys::MYS;
     use mys::url::{Self, Url};
     use mys::package::{Self, Publisher};
     
-    use social_contracts::profile::{Self, Profile, UsernameRegistry};
+    use social_contracts::profile::UsernameRegistry;
     use social_contracts::platform;
     use social_contracts::block_list::{Self, BlockListRegistry};
     use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::my_ip::{Self, MyIPRegistry};
 
     /// Error codes
     const EUnauthorized: u64 = 0;
     const EPostNotFound: u64 = 1;
-    const EInvalidTipAmount: u64 = 4;
-    const ESelfTipping: u64 = 5;
-    const EInvalidParentReference: u64 = 6;
-    const EContentTooLarge: u64 = 7;
-    const ETooManyMediaUrls: u64 = 8;
-    const EInvalidPostType: u64 = 9;
-    const EUnauthorizedTransfer: u64 = 10;
-    const EReportReasonInvalid: u64 = 12;
-    const EReportDescriptionTooLong: u64 = 13;
-    const EReactionContentTooLong: u64 = 14;
-    const EPredictionOptionsTooMany: u64 = 15;
-    const EPredictionOptionsEmpty: u64 = 16;
-    const EPredictionAlreadyResolved: u64 = 17;
-    const EPredictionUnresolved: u64 = 18;
-    const EPredictionOptionInvalid: u64 = 19;
-    const ENotPredictionPost: u64 = 20;
-    const EPredictionBettingClosed: u64 = 21;
-    const EPredictionDisabled: u64 = 22;
-    const EUserNotJoinedPlatform: u64 = 23;
-    const EUserBlockedByPlatform: u64 = 24;
-    const EAdminCapRequiredForPrediction: u64 = 25;
-    const EWrongVersion: u64 = 26;
+    const EInvalidTipAmount: u64 = 2;
+    const ESelfTipping: u64 = 3;
+    const EInvalidParentReference: u64 = 4;
+    const EContentTooLarge: u64 = 5;
+    const ETooManyMediaUrls: u64 = 6;
+    const EInvalidPostType: u64 = 7;
+    const EUnauthorizedTransfer: u64 = 8;
+    const EReportReasonInvalid: u64 = 9;
+    const EReportDescriptionTooLong: u64 = 10;
+    const EReactionContentTooLong: u64 = 11;
+    const EPredictionOptionsTooMany: u64 = 12;
+    const EPredictionOptionsEmpty: u64 = 13;
+    const EPredictionAlreadyResolved: u64 = 14;
+    const EPredictionOptionInvalid: u64 = 15;
+    const ENotPredictionPost: u64 = 16;
+    const EPredictionBettingClosed: u64 = 17;
+    const EPredictionDisabled: u64 = 18;
+    const EUserNotJoinedPlatform: u64 = 19;
+    const EUserBlockedByPlatform: u64 = 20;
+    const EWrongVersion: u64 = 21;
+    const EReactionsNotAllowed: u64 = 22;
+    const ECommentsNotAllowed: u64 = 23;
+    const ERepostsNotAllowed: u64 = 24;
+    const EQuotesNotAllowed: u64 = 25;
+    const ETipsNotAllowed: u64 = 26;
+    const ELicenseNotRegistered: u64 = 27;
 
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
@@ -111,6 +112,8 @@ module social_contracts::post {
         user_reactions: Table<address, String>,
         /// Table to count reactions by type
         reaction_counts: Table<String, u64>,
+        /// Reference to the intellectual property license for the post
+        my_ip_id: Option<address>,
         /// Version for upgrades
         version: u64,
     }
@@ -220,9 +223,9 @@ module social_contracts::post {
 
     /// Tip event
     public struct TipEvent has copy, drop {
-        tipper: address,
-        recipient: address,
-        object_id: address, 
+        object_id: address,
+        from: address,
+        to: address,
         amount: u64,
         is_post: bool,
     }
@@ -533,6 +536,7 @@ module social_contracts::post {
             metadata_json,
             string::utf8(POST_TYPE_PREDICTION),
             option::none(),
+            option::none(),
             ctx
         );
         
@@ -735,15 +739,13 @@ module social_contracts::post {
         // Get the total amount bet across all options
         let total_bet_amount = prediction_data.total_bet_amount;
         
-        // Get the current amount bet on user's chosen option
-        let mut user_option_total_bet = 0;
+        // Get current amount betting settings
         let options_len = vector::length(&prediction_data.options);
         let mut option_index = 0;
         
         while (option_index < options_len) {
             let option = vector::borrow(&prediction_data.options, option_index);
             if (option.id == user_option_id) {
-                user_option_total_bet = option.total_bet;
                 break
             };
             option_index = option_index + 1;
@@ -754,7 +756,6 @@ module social_contracts::post {
         
         // Remove the user's bet from the calculation to get actual current market
         let adjusted_total_bet = total_bet_amount - user_bet_amount;
-        let adjusted_option_bet = user_option_total_bet - user_bet_amount;
         
         // Calculate the withdrawal amount (using proportion of current odds)
         let mut withdrawal_amount = user_bet_amount;
@@ -967,6 +968,7 @@ module social_contracts::post {
         metadata_json: Option<String>,
         post_type: String,
         parent_post_id: Option<address>,
+        my_ip_id: Option<address>,
         ctx: &mut TxContext
     ): address {
         let post = Post {
@@ -987,6 +989,7 @@ module social_contracts::post {
             removed_from_platform: false,
             user_reactions: table::new(ctx),
             reaction_counts: table::new(ctx),
+            my_ip_id,
             version: upgrade::current_version(),
         };
         
@@ -1009,6 +1012,7 @@ module social_contracts::post {
         mut media_urls: Option<vector<vector<u8>>>,
         mentions: Option<vector<address>>,
         metadata_json: Option<String>,
+        my_ip_id: Option<address>,
         ctx: &mut TxContext
     ) {
         let owner = tx_context::sender(ctx);
@@ -1075,6 +1079,7 @@ module social_contracts::post {
             metadata_json,
             string::utf8(POST_TYPE_STANDARD),
             option::none(),
+            my_ip_id,
             ctx
         );
         
@@ -1090,23 +1095,89 @@ module social_contracts::post {
         });
     }
 
-    /// Internal function to create a comment and return its ID
-    fun create_comment_internal(
-        post_id: address,
+    /// Create a comment on a post or a reply to another comment
+    /// Returns the ID of the created comment
+    public entry fun create_comment(
+        registry: &UsernameRegistry,
+        platform: &platform::Platform,
+        block_list_registry: &BlockListRegistry,
+        my_ip_registry: &MyIPRegistry,
+        parent_post: &mut Post,
         parent_comment_id: Option<address>,
-        owner: address,
-        profile_id: address,
         content: String,
-        media_option: Option<vector<Url>>,
+        mut media_urls: Option<vector<vector<u8>>>,
         mentions: Option<vector<address>>,
         metadata_json: Option<String>,
         ctx: &mut TxContext
     ): address {
-        // Create the comment
+        let owner = tx_context::sender(ctx);
+        
+        // Look up the profile ID for the sender
+        let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(registry, owner);
+        assert!(option::is_some(&profile_id_option), EUnauthorized);
+        let profile_id = option::extract(&mut profile_id_option);
+        
+        // Check if user has joined the platform
+        let profile_id_obj = object::id_from_address(profile_id);
+        assert!(platform::has_joined_platform(platform, profile_id_obj), EUserNotJoinedPlatform);
+        
+        // Check if the user is blocked by the platform
+        let platform_address = object::uid_to_address(platform::id(platform));
+        assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
+        
+        // Check if the caller is blocked by the post creator
+        assert!(!block_list::is_blocked(block_list_registry, parent_post.owner, owner), EUnauthorized);
+        
+        // Check IP licensing permissions for comments if MyIP is attached to the parent post
+        if (option::is_some(&parent_post.my_ip_id)) {
+            let post_my_ip_id = *option::borrow(&parent_post.my_ip_id);
+            assert!(my_ip::registry_is_commenting_allowed(my_ip_registry, post_my_ip_id, ctx), ECommentsNotAllowed);
+        };
+        
+        // Validate content length
+        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        
+        // Validate metadata size if provided
+        if (option::is_some(&metadata_json)) {
+            let metadata_ref = option::borrow(&metadata_json);
+            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+        };
+        
+        // Convert and validate media URLs if provided
+        let media_option = if (option::is_some(&media_urls)) {
+            let urls_bytes = option::extract(&mut media_urls);
+            
+            // Validate media URLs count
+            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
+            
+            // Convert media URL bytes to Url objects
+            let mut urls = vector::empty<Url>();
+            let mut i = 0;
+            let len = vector::length(&urls_bytes);
+            while (i < len) {
+                let url_bytes = *vector::borrow(&urls_bytes, i);
+                vector::push_back(&mut urls, url::new_unsafe_from_bytes(url_bytes));
+                i = i + 1;
+            };
+            option::some(urls)
+        } else {
+            option::none<vector<Url>>()
+        };
+        
+        // Validate mentions if provided
+        if (option::is_some(&mentions)) {
+            let mentions_ref = option::borrow(&mentions);
+            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
+        };
+        
+        // Get parent post ID
+        let parent_post_id = object::uid_to_address(&parent_post.id);
+        
+        // Create a proper Comment object instead of reusing post structure
         let comment = Comment {
             id: object::new(ctx),
-            post_id,
-            parent_comment_id,  // Either none or some parent comment ID
+            post_id: parent_post_id,
+            parent_comment_id,
             owner,
             profile_id,
             content,
@@ -1127,25 +1198,36 @@ module social_contracts::post {
         // Get comment ID before sharing
         let comment_id = object::uid_to_address(&comment.id);
         
-        // Share object
+        // Increment the parent post's comment count
+        parent_post.comment_count = parent_post.comment_count + 1;
+        
+        // Emit comment created event
+        event::emit(CommentCreatedEvent {
+            comment_id,
+            post_id: parent_post_id,
+            parent_comment_id,
+            owner,
+            profile_id,
+            content,
+            mentions,
+        });
+        
+        // Share the comment object
         transfer::share_object(comment);
         
-        // Return the comment ID
+        // Return the comment ID to the caller
         comment_id
     }
 
-    /// Create a comment - unified function for standard comments and nested comments
-    public entry fun create_comment(
+    /// Create a repost (repost without comment)
+    public entry fun repost(
         registry: &UsernameRegistry,
-        post: &mut Post,
-        parent_comment_id: Option<address>, // Optional: if present, creates a nested comment
-        content: String,
-        mut media_urls: Option<vector<vector<u8>>>,
-        mentions: Option<vector<address>>,
-        metadata_json: Option<String>,
+        platform: &platform::Platform,
+        block_list_registry: &BlockListRegistry,
+        my_ip_registry: &MyIPRegistry, // Added MyIPRegistry parameter
+        original_post: &mut Post,
         ctx: &mut TxContext
     ) {
-        // Get sender information
         let owner = tx_context::sender(ctx);
         
         // Look up the profile ID for the sender
@@ -1153,73 +1235,58 @@ module social_contracts::post {
         assert!(option::is_some(&profile_id_option), EUnauthorized);
         let profile_id = option::extract(&mut profile_id_option);
         
-        // Get post ID
-        let post_id = object::uid_to_address(&post.id);
+        // Check if user is blocked by original post creator
+        assert!(!block_list::is_blocked(block_list_registry, original_post.owner, owner), EUnauthorized);
         
-        // Validate content length
-        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        // Check if user has joined the platform
+        let profile_id_obj = object::id_from_address(profile_id);
+        assert!(platform::has_joined_platform(platform, profile_id_obj), EUserNotJoinedPlatform);
         
-        // Validate metadata size if provided
-        if (option::is_some(&metadata_json)) {
-            let metadata_ref = option::borrow(&metadata_json);
-            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+        // Check if the user is blocked by the platform
+        let platform_address = object::uid_to_address(platform::id(platform));
+        assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
+        
+        // Check IP licensing permissions for reposts if MyIP is attached
+        if (option::is_some(&original_post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&original_post.my_ip_id);
+            assert!(my_ip::registry_is_reposting_allowed(my_ip_registry, my_ip_id, ctx), ERepostsNotAllowed);
         };
         
-        // Convert and validate media URLs if provided
-        let media_option = if (option::is_some(&media_urls)) {
-            let urls_bytes = option::extract(&mut media_urls);
-            
-            // Validate media URLs count
-            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
-            
-            // Convert media URL bytes to Url
-            let mut urls = vector::empty<Url>();
-            let mut i = 0;
-            let len = vector::length(&urls_bytes);
-            while (i < len) {
-                let url_bytes = *vector::borrow(&urls_bytes, i);
-                vector::push_back(&mut urls, url::new_unsafe_from_bytes(url_bytes));
-                i = i + 1;
-            };
-            option::some(urls)
-        } else {
-            option::none<vector<Url>>()
-        };
+        // Get original post ID
+        let original_post_id = object::uid_to_address(&original_post.id);
         
-        // Validate mentions if provided
-        if (option::is_some(&mentions)) {
-            let mentions_ref = option::borrow(&mentions);
-            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
-        };
+        // Create empty content for a repost
+        let blank_content = string::utf8(b"");
         
-        // Create and share the comment
-        let comment_id = create_comment_internal(
-            post_id,
-            parent_comment_id,
+        // Create and share the repost
+        let repost_id = create_post_internal(
             owner,
             profile_id,
-            content,
-            media_option,
-            mentions,
-            metadata_json,
+            blank_content,
+            option::none(), // No media
+            option::none(), // No mentions
+            option::none(), // No metadata
+            string::utf8(POST_TYPE_REPOST),
+            option::some(original_post_id),
+            option::none(), // No MyIP for reposts
             ctx
         );
         
-        // Increment post comment count
-        post.comment_count = post.comment_count + 1;
+        // Increment repost count on original post
+        original_post.repost_count = original_post.repost_count + 1;
         
-        // Emit comment created event
-        event::emit(CommentCreatedEvent {
-            comment_id,
-            post_id,
-            parent_comment_id,
+        // Emit repost created event
+        event::emit(PostCreatedEvent {
+            post_id: repost_id,
             owner,
             profile_id,
-            content,
-            mentions,
+            content: blank_content,
+            post_type: string::utf8(POST_TYPE_REPOST),
+            parent_post_id: option::some(original_post_id),
+            mentions: option::none(),
         });
     }
-
+    
     /// Create a repost or quote repost depending on provided parameters
     /// If content is provided, it's treated as a quote repost
     /// If content is empty/none, it's treated as a standard repost
@@ -1227,6 +1294,7 @@ module social_contracts::post {
         registry: &UsernameRegistry,
         platform: &platform::Platform,
         block_list_registry: &block_list::BlockListRegistry,
+        my_ip_registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
         original_post: &mut Post,
         mut content: Option<String>,
         mut media_urls: Option<vector<vector<u8>>>,
@@ -1256,6 +1324,19 @@ module social_contracts::post {
         
         // Determine if this is a quote repost or standard repost
         let is_quote_repost = option::is_some(&content) && string::length(option::borrow(&content)) > 0;
+        
+        // Check licensing permissions for the type of repost we're doing
+        if (option::is_some(&original_post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&original_post.my_ip_id);
+            
+            if (is_quote_repost) {
+                // For quote reposts, check if quoting is allowed
+                assert!(my_ip::registry_is_quoting_allowed(my_ip_registry, my_ip_id, ctx), EQuotesNotAllowed);
+            } else {
+                // For regular reposts, check if reposting is allowed
+                assert!(my_ip::registry_is_reposting_allowed(my_ip_registry, my_ip_id, ctx), ERepostsNotAllowed);
+            }
+        };
         
         // Initialize content string
         let content_string = if (is_quote_repost) {
@@ -1349,6 +1430,7 @@ module social_contracts::post {
             metadata_json,
             post_type,
             option::some(original_post_id),
+            option::none(), // No MyIP for reposts
             ctx
         );
         
@@ -1400,6 +1482,7 @@ module social_contracts::post {
             removed_from_platform: _,
             user_reactions,
             reaction_counts,
+            my_ip_id: _,
             version: _,
         } = post;
         
@@ -1471,6 +1554,7 @@ module social_contracts::post {
     /// If the user already has the exact same reaction, it will be removed (toggle behavior)
     public entry fun react_to_post(
         post: &mut Post,
+        registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
         reaction: String,
         ctx: &mut TxContext
     ) {
@@ -1478,6 +1562,12 @@ module social_contracts::post {
         
         // Validate reaction length
         assert!(string::length(&reaction) <= MAX_REACTION_LENGTH, EReactionContentTooLong);
+        
+        // Check IP licensing permissions if MyIP is attached
+        if (option::is_some(&post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&post.my_ip_id);
+            assert!(my_ip::registry_is_reactions_allowed(registry, my_ip_id, ctx), EReactionsNotAllowed);
+        };
         
         // Check if user already reacted to the post
         if (table::contains(&post.user_reactions, user)) {
@@ -1547,42 +1637,56 @@ module social_contracts::post {
         });
     }
 
-    /// Tip a post with MYS tokens (standard post)
+    /// Tip a post creator with MYS tokens
     public entry fun tip_post(
         post: &mut Post,
-        coin: &mut Coin<MYS>,
+        my_ip_registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
+        coins: &mut Coin<MYS>,
         amount: u64,
         ctx: &mut TxContext
     ) {
+        // Basic validation
+        assert!(amount > 0, EInvalidTipAmount);
         let tipper = tx_context::sender(ctx);
-        
-        // Check if amount is valid
-        assert!(amount > 0 && coin::value(coin) >= amount, EInvalidTipAmount);
-        
-        // Prevent self-tipping
         assert!(tipper != post.owner, ESelfTipping);
-        
+
         // Verify this is not a repost or quote repost (those should use tip_repost instead)
         assert!(
             string::utf8(POST_TYPE_REPOST) != post.post_type && 
             string::utf8(POST_TYPE_QUOTE_REPOST) != post.post_type,
             EInvalidPostType
         );
+
+        // Check IP licensing permissions for tipping if MyIP is attached
+        let mut revenue_recipient = post.owner; // Default recipient is post owner
         
-        // Extract tip amount from tipper's coin
-        let tip_coin = coin::split(coin, amount, ctx);
+        if (option::is_some(&post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&post.my_ip_id);
+            
+            // First check if tipping is allowed
+            assert!(my_ip::registry_is_tipping_allowed(my_ip_registry, my_ip_id, ctx), ETipsNotAllowed);
+            
+            // Check if revenue should be redirected
+            if (my_ip::registry_is_revenue_redirected(my_ip_registry, my_ip_id, ctx)) {
+                // Revenue is redirected, get the recipient from registry
+                revenue_recipient = my_ip::registry_get_revenue_recipient(my_ip_registry, my_ip_id);
+            }
+        };
         
-        // Increment the tip counter for tracking purposes
+        // Take the tip amount out of the provided coin
+        let tip_coins = coin::split(coins, amount, ctx);
+        
+        // Record total tips received for this post
         post.tips_received = post.tips_received + amount;
         
-        // Transfer tip directly to post owner
-        transfer::public_transfer(tip_coin, post.owner);
+        // Transfer tip to post owner (or revenue recipient)
+        transfer::public_transfer(tip_coins, revenue_recipient);
         
         // Emit tip event
         event::emit(TipEvent {
-            tipper,
-            recipient: post.owner,
             object_id: object::uid_to_address(&post.id),
+            from: tipper,
+            to: revenue_recipient,
             amount,
             is_post: true,
         });
@@ -1592,6 +1696,7 @@ module social_contracts::post {
     public entry fun tip_repost(
         post: &mut Post, // The repost
         original_post: &mut Post, // The original post
+        my_ip_registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
         coin: &mut Coin<MYS>,
         amount: u64,
         ctx: &mut TxContext
@@ -1618,6 +1723,12 @@ module social_contracts::post {
         let parent_id = *option::borrow(&post.parent_post_id);
         assert!(parent_id == object::uid_to_address(&original_post.id), EInvalidParentReference);
         
+        // Check IP licensing permissions for tipping on the original post if MyIP is attached
+        if (option::is_some(&original_post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&original_post.my_ip_id);
+            assert!(my_ip::registry_is_tipping_allowed(my_ip_registry, my_ip_id, ctx), ETipsNotAllowed);
+        };
+        
         // Skip split if repost owner and original post owner are the same
         if (post.owner == original_post.owner) {
             // Standard flow - all goes to the same owner
@@ -1627,13 +1738,27 @@ module social_contracts::post {
             
             // Emit tip event
             event::emit(TipEvent {
-                tipper,
-                recipient: post.owner,
                 object_id: object::uid_to_address(&post.id),
+                from: tipper,
+                to: post.owner,
                 amount,
                 is_post: true,
             });
         } else {
+            // Set up default recipients
+            let repost_owner_recipient = post.owner;
+            let mut original_owner_recipient = original_post.owner;
+            
+            // Check if revenue should be redirected for the original post
+            if (option::is_some(&original_post.my_ip_id)) {
+                let my_ip_id = *option::borrow(&original_post.my_ip_id);
+                
+                if (my_ip::registry_is_revenue_redirected(my_ip_registry, my_ip_id, ctx)) {
+                    // Revenue is redirected, get the recipient from registry
+                    original_owner_recipient = my_ip::registry_get_revenue_recipient(my_ip_registry, my_ip_id);
+                }
+            };
+            
             // Calculate split - 50/50 between repost owner and original post owner
             let repost_owner_amount = (amount * REPOST_TIP_PERCENTAGE) / 100;
             let original_owner_amount = amount - repost_owner_amount;
@@ -1647,36 +1772,37 @@ module social_contracts::post {
             original_post.tips_received = original_post.tips_received + original_owner_amount;
             
             // Transfer the repost owner's share
-            transfer::public_transfer(tip_coin, post.owner);
+            transfer::public_transfer(tip_coin, repost_owner_recipient);
             
             // Transfer the original post owner's share
-            transfer::public_transfer(original_owner_coin, original_post.owner);
+            transfer::public_transfer(original_owner_coin, original_owner_recipient);
             
             // Emit tip event for the repost owner
             event::emit(TipEvent {
-                tipper,
-                recipient: post.owner,
                 object_id: object::uid_to_address(&post.id),
+                from: tipper,
+                to: repost_owner_recipient,
                 amount: repost_owner_amount,
                 is_post: true,
             });
             
             // Emit tip event for the original post owner
             event::emit(TipEvent {
-                tipper, 
-                recipient: original_post.owner,
                 object_id: object::uid_to_address(&original_post.id),
+                from: tipper, 
+                to: original_owner_recipient,
                 amount: original_owner_amount,
                 is_post: true,
             });
         }
     }
-
+    
     /// Tip a comment with MYS tokens
     /// Split is 80% to commenter, 20% to post owner
     public entry fun tip_comment(
         comment: &mut Comment,
         post: &mut Post,
+        my_ip_registry: &my_ip::MyIPRegistry,
         coin: &mut Coin<MYS>,
         amount: u64,
         ctx: &mut TxContext
@@ -1688,6 +1814,24 @@ module social_contracts::post {
         
         // Prevent self-tipping
         assert!(tipper != comment.owner, ESelfTipping);
+        
+        // Set up default recipients
+        let commenter_recipient = comment.owner;
+        let mut post_owner_recipient = post.owner;
+        
+        // Check IP licensing permissions for tipping if MyIP is attached to the post
+        if (option::is_some(&post.my_ip_id)) {
+            let my_ip_id = *option::borrow(&post.my_ip_id);
+            
+            // First check if tipping is allowed
+            assert!(my_ip::registry_is_tipping_allowed(my_ip_registry, my_ip_id, ctx), ETipsNotAllowed);
+            
+            // Check if revenue should be redirected for the post owner's share
+            if (my_ip::registry_is_revenue_redirected(my_ip_registry, my_ip_id, ctx)) {
+                // Revenue is redirected, get the recipient from registry
+                post_owner_recipient = my_ip::registry_get_revenue_recipient(my_ip_registry, my_ip_id);
+            }
+        };
         
         // Extract tip amount from tipper's coin
         let mut tip_coin = coin::split(coin, amount, ctx);
@@ -1704,18 +1848,27 @@ module social_contracts::post {
         post.tips_received = post.tips_received + post_owner_amount;
         
         // Transfer the commenter's share 
-        transfer::public_transfer(tip_coin, comment.owner);
+        transfer::public_transfer(tip_coin, commenter_recipient);
         
         // Transfer the post owner's share
-        transfer::public_transfer(post_owner_coin, post.owner);
+        transfer::public_transfer(post_owner_coin, post_owner_recipient);
         
-        // Emit tip event
+        // Emit tip event for commenter
         event::emit(TipEvent {
-            tipper,
-            recipient: comment.owner,
             object_id: object::uid_to_address(&comment.id),
-            amount,
+            from: tipper,
+            to: commenter_recipient,
+            amount: commenter_amount,
             is_post: false,
+        });
+        
+        // Emit tip event for post owner
+        event::emit(TipEvent {
+            object_id: object::uid_to_address(&post.id),
+            from: tipper,
+            to: post_owner_recipient,
+            amount: post_owner_amount,
+            is_post: true,
         });
     }
 
@@ -1756,7 +1909,7 @@ module social_contracts::post {
         post: &mut Post,
         new_owner: address,
         registry: &UsernameRegistry,
-        ctx: &mut TxContext
+        _ctx: &mut TxContext
     ) {
         // Verify the publisher is for this module
         assert!(package::from_module<Post>(publisher), EUnauthorizedTransfer);
@@ -2196,6 +2349,7 @@ module social_contracts::post {
             option::none(), // No metadata
             string::utf8(POST_TYPE_STANDARD), // Standard post type
             option::none(), // No parent post
+            option::none(), // No MyIP ID
             ctx
         )
     }
@@ -2220,6 +2374,7 @@ module social_contracts::post {
             option::none(), // No metadata
             string::utf8(POST_TYPE_PREDICTION), // Prediction post type
             option::none(), // No parent post
+            option::none(), // No MyIP ID
             ctx
         );
         
@@ -2288,6 +2443,47 @@ module social_contracts::post {
         transfer::public_transfer(admin_cap, tx_context::sender(ctx));
         
         admin_cap_id
+    }
+    
+    /// Test-only function to create a comment directly for testing
+    #[test_only]
+    public fun test_create_comment(
+        owner: address,
+        profile_id: address,
+        post_id: address,
+        content: String,
+        ctx: &mut TxContext
+    ): address {
+        // Create a Comment object directly
+        let comment = Comment {
+            id: object::new(ctx),
+            post_id,
+            parent_comment_id: option::none(),
+            owner,
+            profile_id,
+            content,
+            media: option::none(),
+            mentions: option::none(),
+            metadata_json: option::none(),
+            created_at: tx_context::epoch(ctx),
+            reaction_count: 0,
+            comment_count: 0,
+            repost_count: 0,
+            tips_received: 0,
+            removed_from_platform: false,
+            user_reactions: table::new(ctx),
+            reaction_counts: table::new(ctx),
+            version: upgrade::current_version(),
+        };
+        
+        // Get comment ID before sharing
+        let comment_id = object::uid_to_address(&comment.id);
+        
+        // Share the comment
+        transfer::share_object(comment);
+        
+        // Return the comment ID
+        comment_id
     }
 
     // === Versioning Functions ===
@@ -2401,5 +2597,70 @@ module social_contracts::post {
         );
         
         // Any migration logic can be added here for future upgrades
+    }
+
+    /// Get the MyIP ID from a post (if any)
+    public fun my_ip_id(post: &Post): &Option<address> {
+        &post.my_ip_id
+    }
+    
+    /// Check if a post has an attached MyIP license
+    public fun has_my_ip(post: &Post): bool {
+        option::is_some(&post.my_ip_id)
+    }
+    
+    /// Attach a MyIP license to a post (only owner can do this)
+    public entry fun attach_my_ip(
+        post: &mut Post,
+        my_ip_registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
+        my_ip_id: address, // Now just passing the ID
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is the post owner
+        assert!(tx_context::sender(ctx) == post.owner, EUnauthorized);
+        
+        // Verify the MyIP exists in the registry
+        assert!(my_ip::is_registered(my_ip_registry, my_ip_id), ELicenseNotRegistered);
+        
+        // Verify caller is the MyIP creator
+        let creator = my_ip::registry_get_creator(my_ip_registry, my_ip_id);
+        assert!(tx_context::sender(ctx) == creator, EUnauthorized);
+        
+        // Set the MyIP ID
+        post.my_ip_id = option::some(my_ip_id);
+    }
+    
+    /// Remove the MyIP license from a post (only owner can do this)
+    public entry fun remove_my_ip(
+        post: &mut Post,
+        _ctx: &mut TxContext
+    ) {
+        // Verify caller is the post owner
+        assert!(tx_context::sender(_ctx) == post.owner, EUnauthorized);
+        
+        // Remove the MyIP ID
+        post.my_ip_id = option::none();
+    }
+
+    /// Increment the comment count for a post
+    public entry fun increment_comment_count(
+        post: &mut Post,
+        block_list_registry: &BlockListRegistry,
+        my_ip_registry: &my_ip::MyIPRegistry,
+        ctx: &mut TxContext
+    ) {
+        let caller = tx_context::sender(ctx);
+        
+        // Check if the caller is blocked by the post creator
+        assert!(!block_list::is_blocked(block_list_registry, post.owner, caller), EUnauthorized);
+        
+        // Check IP licensing permissions for comments if MyIP is attached to the post
+        if (option::is_some(&post.my_ip_id)) {
+            let post_my_ip_id = *option::borrow(&post.my_ip_id);
+            assert!(my_ip::registry_is_commenting_allowed(my_ip_registry, post_my_ip_id, ctx), ECommentsNotAllowed);
+        };
+        
+        // Increment comment count
+        post.comment_count = post.comment_count + 1;
     }
 }

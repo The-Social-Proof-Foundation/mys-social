@@ -3,50 +3,39 @@
 
 /// Profile module for the MySocial network
 /// Handles user identity, profile creation, management, and username registration
-#[allow(unused_const, duplicate_alias, unused_use, unused_variable, implicit_const_copy, unused_let_mut)]
+
 module social_contracts::profile {
     use std::string::{Self, String};
-    use std::vector;
-    use std::option::{Self, Option};
     use std::ascii;
     
-    use mys::object::{Self, UID, ID};
-    use mys::tx_context::{Self, TxContext};
-    use mys::event;
-    use mys::transfer;
-    use mys::url::{Self, Url};
     use mys::dynamic_field;
+    use mys::event;
     use mys::table::{Self, Table};
     use mys::coin::{Self, Coin};
-    use mys::balance::{Self, Balance};
+    use mys::balance::Balance;
     use mys::mys::MYS;
-    use mys::package::{Self, Publisher};
+    use mys::url::{Self, Url};
+    
     use social_contracts::upgrade;
-    use social_contracts::platform;
 
     /// Error codes
     const EProfileAlreadyExists: u64 = 0;
     const EUnauthorized: u64 = 1;
-    const EUsernameAlreadySet: u64 = 2;
-    const EUsernameNotRegistered: u64 = 3;
-    const EInvalidUsername: u64 = 4;
-    const ENameRegistryMismatch: u64 = 5;
-    const EProfileCreateFailed: u64 = 6;
-    const EReservedName: u64 = 7;
-    const EInsufficientPayment: u64 = 8;
-    const EUsernameNotAvailable: u64 = 9;
-    const ENotAdmin: u64 = 10;
-    const ENotAuthorizedService: u64 = 12;
+    const EInvalidUsername: u64 = 2;
+    const EProfileCreateFailed: u64 = 3;
+    const EReservedName: u64 = 4;
+    const EUsernameNotAvailable: u64 = 5;
+    const ENotAuthorizedService: u64 = 6;
     // New error codes for profile offers
-    const EOfferAlreadyExists: u64 = 13;
-    const EOfferDoesNotExist: u64 = 14;
-    const ECannotOfferOwnProfile: u64 = 15;
-    const EInsufficientTokens: u64 = 16;
-    const EUnauthorizedOfferAction: u64 = 17;
-    const EOfferBelowMinimum: u64 = 18;
+    const EOfferAlreadyExists: u64 = 7;
+    const EOfferDoesNotExist: u64 = 8;
+    const ECannotOfferOwnProfile: u64 = 9;
+    const EInsufficientTokens: u64 = 10;
+    const EUnauthorizedOfferAction: u64 = 11;
+    const EOfferBelowMinimum: u64 = 12;
     const PROFILE_SALE_FEE_BPS: u64 = 500;
-    const EBadgeNotFound: u64 = 19;
-    const EBadgeAlreadyExists: u64 = 20;
+    const EBadgeNotFound: u64 = 13;
+    const EBadgeAlreadyExists: u64 = 14;
 
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -1016,7 +1005,6 @@ module social_contracts::profile {
     /// Create an offer to purchase a profile
     /// Locks MYSO tokens in the offer
     public entry fun create_offer(
-        registry: &mut UsernameRegistry,
         profile: &mut Profile,
         coin: &mut Coin<MYS>,
         amount: u64,
@@ -1106,8 +1094,6 @@ module social_contracts::profile {
         
         // Calculate the fee amount (5% of the total)
         let fee_amount = (amount * PROFILE_SALE_FEE_BPS) / 10000;
-        // Calculate amount to send to profile owner
-        let owner_amount = amount - fee_amount;
         
         // Convert the locked balance to a coin
         let mut payment = coin::from_balance(locked_myso, ctx);
@@ -1217,7 +1203,6 @@ module social_contracts::profile {
     /// Can be called by the profile owner to reject or the offeror to revoke
     /// Returns locked MYSO tokens to the offeror
     public entry fun reject_or_revoke_offer(
-        registry: &mut UsernameRegistry,
         profile: &mut Profile,
         offeror: address,
         ctx: &mut TxContext

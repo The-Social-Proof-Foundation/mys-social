@@ -4,29 +4,21 @@
 /// Governance module for the MySocial network
 /// Manages the decentralized governance system with delegate council and community assembly
 /// Implements proposal submission, voting, and execution processes
-#[allow(unused_use, duplicate_alias, unused_const, unused_field, unused_assignment, unused_mut_parameter)]
+
 module social_contracts::governance {
-    use std::string::{Self, String};
-    use std::vector;
-    use std::option::{Self, Option};
-    use std::bcs;
+    use std::string::{String};
     
     use mys::dynamic_field;
     use mys::vec_set::{Self, VecSet};
-    use mys::tx_context::{Self, TxContext};
-    use mys::object::{Self, UID, ID};
     use mys::event;
-    use mys::transfer;
     use mys::table::{Self, Table};
     use mys::coin::{Self, Coin};
     use mys::balance::{Self, Balance};
     use mys::mys::MYS;
     use mys::package::{Self, Publisher};
     
-    use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::upgrade;
     use social_contracts::profile;
-    use social_contracts::post;
-    use social_contracts::platform;
 
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -34,20 +26,17 @@ module social_contracts::governance {
     const EInvalidParameter: u64 = 2;
     const ENotDelegate: u64 = 3;
     const EAlreadyDelegate: u64 = 4;
-    const ETermNotExpired: u64 = 5;
     const EProposalNotFound: u64 = 6;
     const EInvalidProposalStatus: u64 = 7;
     const EAlreadyVoted: u64 = 8;
     const ENotVotingPhase: u64 = 9;
-    const EInsufficientVotes: u64 = 10;
     const EVotingPeriodNotEnded: u64 = 11;
     const EVotingPeriodEnded: u64 = 12;
-    const EInsufficientAge: u64 = 15;
-    const EExceedsMaxVotes: u64 = 16;
-    const EInvalidVoteCount: u64 = 17;
-    const EInvalidRegistry: u64 = 18;
-    const EAlreadyNominated: u64 = 19;
-    const EWrongVersion: u64 = 11;
+    const EExceedsMaxVotes: u64 = 13;
+    const EInvalidVoteCount: u64 = 14;
+    const EInvalidRegistry: u64 = 15;
+    const EAlreadyNominated: u64 = 16;
+    const EWrongVersion: u64 = 17;
 
     /// Proposal type constants
     const PROPOSAL_TYPE_ECOSYSTEM: u8 = 0;
@@ -1172,7 +1161,7 @@ module social_contracts::governance {
     fun move_to_community_voting_by_id(
         registry: &mut GovernanceRegistry,
         proposal_id: ID,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         // Get proposal from registry
         let mut proposal = table::remove(&mut registry.proposals, proposal_id);
