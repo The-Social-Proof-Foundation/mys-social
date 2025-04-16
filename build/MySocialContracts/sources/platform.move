@@ -37,6 +37,8 @@ module social_contracts::platform {
     const EAlreadyJoined: u64 = 8;
     const ENotJoined: u64 = 9;
     const EWrongVersion: u64 = 10;
+    const EInsufficientTreasuryFunds: u64 = 11;
+    const EEmptyRecipientsList: u64 = 12;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -198,6 +200,16 @@ module social_contracts::platform {
         profile_id: ID,
         platform_id: ID,
         user: address,
+        timestamp: u64,
+    }
+
+    /// Event emitted when tokens are airdropped from the platform treasury
+    public struct TokenAirdropEvent has copy, drop {
+        platform_id: address,
+        recipient: address,
+        amount: u64,
+        reason_code: u8,
+        executed_by: address,
         timestamp: u64,
     }
 
@@ -916,44 +928,184 @@ module social_contracts::platform {
         )
     }
 
-    /// Create a new platform with DAO governance enabled and default governance parameters
-    public entry fun create_platform_with_dao(
-        registry: &mut PlatformRegistry,
-        name: String,
-        tagline: String,
-        description: String,
-        logo_url: String,
-        terms_of_service: String,
-        privacy_policy: String,
-        platforms: vector<String>,
-        links: vector<String>,
-        status: u8,
-        release_date: String,
+    /// Airdrop tokens to multiple recipients from the platform treasury
+    /// Can only be called by platform developer or moderator
+    public entry fun airdrop_from_treasury(
+        platform: &mut Platform,
+        recipients: vector<address>,
+        amount_per_recipient: u64,
+        reason_code: u8,
         ctx: &mut TxContext
     ) {
-        create_platform(
-            registry,
-            name,
-            tagline,
-            description,
-            logo_url,
-            terms_of_service,
-            privacy_policy,
-            platforms,
-            links,
-            status,
-            release_date,
-            true, // wants_dao_governance is true
-            option::some(7), // delegate_count
-            option::some(30), // delegate_term_epochs
-            option::some(50_000_000), // proposal_submission_cost
-            option::some(7), // min_on_chain_age_days
-            option::some(5), // max_votes_per_user
-            option::some(5_000_000), // quadratic_base_cost
-            option::some(3), // voting_period_epochs
-            option::some(15), // quorum_votes
-            ctx
-        )
+        let caller = tx_context::sender(ctx);
+        
+        // Verify caller is platform developer or moderator
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
+        
+        // Check that recipients list is not empty
+        let recipients_count = vector::length(&recipients);
+        assert!(recipients_count > 0, EEmptyRecipientsList);
+        
+        // Calculate total amount needed
+        let total_amount = amount_per_recipient * recipients_count;
+        
+        // Verify platform treasury has enough funds
+        assert!(balance::value(&platform.treasury) >= total_amount, EInsufficientTreasuryFunds);
+        
+        // Get current timestamp for events
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        let platform_id = object::uid_to_address(&platform.id);
+        
+        // Send tokens to each recipient
+        let mut i = 0;
+        while (i < recipients_count) {
+            let recipient = *vector::borrow(&recipients, i);
+            
+            // Create coin from platform treasury balance
+            let airdrop_coin = coin::from_balance(
+                balance::split(&mut platform.treasury, amount_per_recipient), 
+                ctx
+            );
+            
+            // Transfer to recipient
+            transfer::public_transfer(airdrop_coin, recipient);
+            
+            // Emit airdrop event for tracking
+            event::emit(TokenAirdropEvent {
+                platform_id,
+                recipient,
+                amount: amount_per_recipient,
+                reason_code,
+                executed_by: caller,
+                timestamp: current_time,
+            });
+            
+            i = i + 1;
+        };
+    }
+
+    /// Assign a badge to a profile - can only be called by platform admin/moderator
+    /// This is the primary entry point for badge assignment
+    public entry fun assign_badge(
+        platform: &Platform,
+        profile: &mut profile::Profile,
+        badge_name: String,
+        badge_description: String,
+        badge_image_url: String,
+        badge_type: u8,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform admin or moderator
+        let caller = tx_context::sender(ctx);
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
+        
+        // Get platform ID
+        let platform_id = object::uid_to_address(&platform.id);
+        
+        // Get current time
+        let now = tx_context::epoch(ctx);
+        
+        // Create a unique badge ID
+        let mut badge_id = string::utf8(b"badge_");
+        string::append(&mut badge_id, badge_name);
+        
+        // Add the badge directly to the profile
+        profile::add_badge_to_profile(
+            profile,
+            badge_id,
+            badge_name,
+            badge_description,
+            badge_image_url,
+            platform_id,
+            now,
+            caller,
+            badge_type
+        );
+    }
+
+    /// Revoke a badge from a profile - can only be called by platform admin/moderator
+    /// This is the primary entry point for badge revocation
+    public entry fun revoke_badge(
+        platform: &Platform,
+        profile: &mut profile::Profile,
+        badge_id: String,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform admin or moderator
+        let caller = tx_context::sender(ctx);
+        assert!(is_developer_or_moderator(platform, caller), EUnauthorized);
+        
+        // Get platform ID
+        let platform_id = object::uid_to_address(&platform.id);
+        
+        // Get current time
+        let now = tx_context::epoch(ctx);
+        
+        // Remove the badge directly from the profile
+        profile::remove_badge_from_profile(
+            profile,
+            &badge_id,
+            platform_id,
+            caller,
+            now
+        );
+    }
+
+    /// When adding a moderator to a platform, register them with the profile module
+    public fun add_moderator_register(
+        platform: &mut Platform,
+        moderator_address: address,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform developer
+        let caller = tx_context::sender(ctx);
+        assert!(platform.developer == caller, EUnauthorized);
+        
+        // Get moderators set
+        let moderators = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, MODERATORS_FIELD);
+        
+        // Add moderator if not already a moderator
+        if (!vec_set::contains(moderators, &moderator_address)) {
+            vec_set::insert(moderators, moderator_address);
+            
+            // Emit moderator added event
+            let platform_id = object::uid_to_address(&platform.id);
+            event::emit(ModeratorAddedEvent {
+                platform_id,
+                moderator_address,
+                added_by: caller,
+            });
+        };
+    }
+    
+    /// When removing a moderator from a platform
+    public fun remove_moderator_unregister(
+        platform: &mut Platform,
+        moderator_address: address,
+        ctx: &mut TxContext
+    ) {
+        // Verify caller is platform developer
+        let caller = tx_context::sender(ctx);
+        assert!(platform.developer == caller, EUnauthorized);
+        
+        // Cannot remove developer as moderator
+        assert!(moderator_address != platform.developer, EUnauthorized);
+        
+        // Get moderators set
+        let moderators = dynamic_field::borrow_mut<vector<u8>, VecSet<address>>(&mut platform.id, MODERATORS_FIELD);
+        
+        // Remove moderator if they are a moderator
+        if (vec_set::contains(moderators, &moderator_address)) {
+            vec_set::remove(moderators, &moderator_address);
+            
+            // Emit moderator removed event
+            let platform_id = object::uid_to_address(&platform.id);
+            event::emit(ModeratorRemovedEvent {
+                platform_id,
+                moderator_address,
+                removed_by: caller,
+            });
+        };
     }
 
     #[test_only]

@@ -10,7 +10,7 @@ module social_contracts::profile {
     use std::option::{Self, Option};
     use std::ascii;
     
-    use mys::object::{Self, UID};
+    use mys::object::{Self, UID, ID};
     use mys::tx_context::{Self, TxContext};
     use mys::event;
     use mys::transfer;
@@ -22,6 +22,7 @@ module social_contracts::profile {
     use mys::mys::MYS;
     use mys::package::{Self, Publisher};
     use social_contracts::upgrade;
+    use social_contracts::platform;
 
     /// Error codes
     const EProfileAlreadyExists: u64 = 0;
@@ -44,6 +45,8 @@ module social_contracts::profile {
     const EUnauthorizedOfferAction: u64 = 17;
     const EOfferBelowMinimum: u64 = 18;
     const PROFILE_SALE_FEE_BPS: u64 = 500;
+    const EBadgeNotFound: u64 = 19;
+    const EBadgeAlreadyExists: u64 = 20;
 
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -156,9 +159,64 @@ module social_contracts::profile {
         tips_received: u64,
         /// Minimum offer amount in MYSO tokens the owner is willing to accept (optional)
         min_offer_amount: Option<u64>,
+        /// Collection of badges assigned to the profile
+        badges: vector<ProfileBadge>,
+    }
+
+    /// Profile Badge that can be assigned to profiles by platform admins/moderators
+    /// These badges cannot be transferred or sold and stay with the profile
+    public struct ProfileBadge has store, copy, drop {
+        /// Unique identifier for the badge (platform ID + badge name)
+        badge_id: String,
+        /// Name of the badge
+        name: String,
+        /// Description of what the badge represents
+        description: String,
+        /// Image URL for the badge
+        image_url: String,
+        /// ID of the platform that issued the badge
+        platform_id: address,
+        /// Timestamp when the badge was issued
+        issued_at: u64,
+        /// Address of the admin/moderator who issued the badge
+        issued_by: address,
+        /// Badge type/tier (1-100), allows for badge hierarchy
+        badge_type: u8,
     }
 
     // === Events ===
+
+    /// Event emitted when a badge is assigned to a profile
+    public struct BadgeAssignedEvent has copy, drop {
+        /// ID of the profile receiving the badge
+        profile_id: address,
+        /// Badge identifier
+        badge_id: String,
+        /// Badge name
+        name: String,
+        /// Platform ID that issued the badge
+        platform_id: address,
+        /// Admin/moderator who assigned the badge
+        assigned_by: address,
+        /// Timestamp when assigned
+        assigned_at: u64,
+        /// Badge type/tier
+        badge_type: u8,
+    }
+
+    /// Event emitted when a badge is revoked from a profile
+    public struct BadgeRevokedEvent has copy, drop {
+        /// ID of the profile losing the badge
+        profile_id: address,
+        /// Badge identifier
+        badge_id: String,
+        /// Platform ID that issued the badge
+        platform_id: address,
+        /// Admin/moderator who revoked the badge
+        revoked_by: address,
+        /// Timestamp when revoked
+        revoked_at: u64,
+    }
 
     /// Profile created event
     public struct ProfileCreatedEvent has copy, drop {
@@ -426,6 +484,7 @@ module social_contracts::profile {
             post_count: 0,
             tips_received: 0,
             min_offer_amount: option::none(),
+            badges: vector::empty<ProfileBadge>(),
         };
         
         // Get the profile ID
@@ -1327,6 +1386,7 @@ module social_contracts::profile {
             tips_received: 0,
             following_count: 0,
             min_offer_amount: option::none(),
+            badges: vector::empty<ProfileBadge>(),
         };
         
         // Get the profile ID and use it for registration
@@ -1350,5 +1410,158 @@ module social_contracts::profile {
     /// Check if a profile is for sale (has a minimum offer amount set)
     public fun is_for_sale(profile: &Profile): bool {
         option::is_some(&profile.min_offer_amount)
+    }
+
+    /// Adds a badge to a profile - called by platform module
+    /// This function trusts the caller has done authorization checks
+    public fun add_badge_to_profile(
+        profile: &mut Profile,
+        badge_id: String,
+        badge_name: String,
+        badge_description: String,
+        badge_image_url: String,
+        platform_id: address,
+        timestamp: u64,
+        issuer: address,
+        badge_type: u8
+    ) {
+        // Create the new badge
+        let badge = ProfileBadge {
+            badge_id: badge_id,
+            name: badge_name,
+            description: badge_description,
+            image_url: badge_image_url,
+            platform_id,
+            issued_at: timestamp,
+            issued_by: issuer,
+            badge_type,
+        };
+        
+        // Check if badge with same ID already exists
+        let mut i = 0;
+        let len = vector::length(&profile.badges);
+        while (i < len) {
+            let existing_badge = vector::borrow(&profile.badges, i);
+            if (string::as_bytes(&existing_badge.badge_id) == string::as_bytes(&badge_id)) {
+                abort EBadgeAlreadyExists
+            };
+            i = i + 1;
+        };
+        
+        // Add the badge to the profile
+        vector::push_back(&mut profile.badges, badge);
+        
+        // Emit badge assigned event
+        event::emit(BadgeAssignedEvent {
+            profile_id: object::uid_to_address(&profile.id),
+            badge_id: badge_id,
+            name: badge_name,
+            platform_id,
+            assigned_by: issuer,
+            assigned_at: timestamp,
+            badge_type,
+        });
+    }
+    
+    /// Removes a badge from a profile - called by platform module
+    /// This function trusts the caller has done authorization checks
+    public fun remove_badge_from_profile(
+        profile: &mut Profile,
+        badge_id: &String,
+        platform_id: address,
+        revoker: address,
+        timestamp: u64
+    ) {
+        // Search for and remove the badge with the given ID
+        let mut found = false;
+        let mut i = 0;
+        let len = vector::length(&profile.badges);
+        
+        while (i < len) {
+            let badge = vector::borrow(&profile.badges, i);
+            if (string::as_bytes(&badge.badge_id) == string::as_bytes(badge_id)) {
+                // Ensure badge was issued by this platform
+                assert!(badge.platform_id == platform_id, EUnauthorized);
+                
+                // Remove the badge at this index
+                vector::remove(&mut profile.badges, i);
+                found = true;
+                
+                // Emit badge revoked event
+                event::emit(BadgeRevokedEvent {
+                    profile_id: object::uid_to_address(&profile.id),
+                    badge_id: *badge_id,
+                    platform_id,
+                    revoked_by: revoker,
+                    revoked_at: timestamp,
+                });
+                
+                break
+            };
+            i = i + 1;
+        };
+        
+        // Make sure we found and removed the badge
+        assert!(found, EBadgeNotFound);
+    }
+
+    /// Get all badges associated with a profile
+    public fun get_profile_badges(profile: &Profile): vector<ProfileBadge> {
+        profile.badges
+    }
+    
+    /// Check if a profile has a specific badge
+    public fun has_badge(profile: &Profile, badge_id: &String): bool {
+        let mut i = 0;
+        let len = vector::length(&profile.badges);
+        
+        while (i < len) {
+            let badge = vector::borrow(&profile.badges, i);
+            if (string::as_bytes(&badge.badge_id) == string::as_bytes(badge_id)) {
+                return true
+            };
+            i = i + 1;
+        };
+        
+        false
+    }
+    
+    /// Get a specific badge from a profile by badge ID
+    public fun get_badge(profile: &Profile, badge_id: &String): Option<ProfileBadge> {
+        let mut i = 0;
+        let len = vector::length(&profile.badges);
+        
+        while (i < len) {
+            let badge = vector::borrow(&profile.badges, i);
+            if (string::as_bytes(&badge.badge_id) == string::as_bytes(badge_id)) {
+                return option::some(*badge)
+            };
+            i = i + 1;
+        };
+        
+        option::none()
+    }
+    
+    /// Get badges issued by a specific platform
+    public fun get_platform_badges(profile: &Profile, platform_id: address): vector<ProfileBadge> {
+        let mut result = vector::empty<ProfileBadge>();
+        
+        let mut i = 0;
+        let len = vector::length(&profile.badges);
+        
+        while (i < len) {
+            let badge = vector::borrow(&profile.badges, i);
+            if (badge.platform_id == platform_id) {
+                vector::push_back(&mut result, *badge);
+            };
+            i = i + 1;
+        };
+        
+        result
+    }
+    
+    /// Count the number of badges a profile has
+    public fun badge_count(profile: &Profile): u64 {
+        vector::length(&profile.badges)
     }
 }
