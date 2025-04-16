@@ -1071,4 +1071,52 @@ module social_contracts::my_ip {
         // Share the registry
         transfer::share_object(registry);
     }
+
+    #[test_only]
+    /// Test helper to destroy a MyIP instance
+    public fun test_destroy(ip: MyIP) {
+        let MyIP { 
+            id, name: _, description: _, creator: _, creation_time: _, 
+            license_type: _, permission_flags: _, license_state: _,
+            proof_of_creativity_id: _, custom_license_uri: _, revenue_recipient: _,
+            transferable: _, expires_at: _, version: _ 
+        } = ip;
+        object::delete(id);
+    }
+
+    #[test_only]
+    /// Helper functions for testing permission flags without direct access to constants
+    public fun is_commercial_use_allowed_for_flags(flags: u64): bool {
+        (flags & PERMISSION_COMMERCIAL_USE) != 0
+    }
+
+    #[test_only]
+    public fun is_derivatives_allowed_for_flags(flags: u64): bool {
+        (flags & PERMISSION_DERIVATIVES_ALLOWED) != 0
+    }
+
+    #[test_only]
+    public fun is_public_license_for_flags(flags: u64): bool {
+        (flags & PERMISSION_PUBLIC_LICENSE) != 0
+    }
+
+    #[test_only]
+    public fun is_authority_required_for_flags(flags: u64): bool {
+        (flags & PERMISSION_AUTHORITY_REQUIRED) != 0
+    }
+
+    #[test_only]
+    public fun is_share_alike_required_for_flags(flags: u64): bool {
+        (flags & PERMISSION_SHARE_ALIKE) != 0
+    }
+
+    #[test_only]
+    public fun is_attribution_required_for_flags(flags: u64): bool {
+        (flags & PERMISSION_REQUIRE_ATTRIBUTION) != 0
+    }
+
+    #[test_only]
+    public fun is_revenue_redirected_for_flags(flags: u64): bool {
+        (flags & PERMISSION_REVENUE_REDIRECT) != 0
+    }
 }

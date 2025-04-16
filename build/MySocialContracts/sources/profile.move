@@ -3,7 +3,7 @@
 
 /// Profile module for the MySocial network
 /// Handles user identity, profile creation, management, and username registration
-/// #[allow(unused_const, duplicate_alias, unused_use, unused_variable, implicit_const_copy, unused_let_mut)]
+
 module social_contracts::profile {
     use std::string::{Self, String};
     use std::ascii;

@@ -54,6 +54,21 @@ module social_contracts::upgrade {
         // The UpgradeCap will be automatically transferred to the publisher
         // by the MySocial system when the package is published
     }
+    
+    #[test_only]
+    /// Initialize the upgrade module for testing
+    public fun init_for_testing(ctx: &mut TxContext) {
+        // Get the publisher (sender of the publish transaction)
+        let publisher = tx_context::sender(ctx);
+        
+        // Create admin capability
+        let admin_cap = AdminCap {
+            id: object::new(ctx)
+        };
+        
+        // Transfer admin capability to publisher
+        transfer::transfer(admin_cap, publisher);
+    }
 
     /// Authorize an upgrade with the upgrade cap
     public fun authorize_upgrade(

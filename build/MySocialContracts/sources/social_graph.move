@@ -56,6 +56,12 @@ module social_contracts::social_graph {
         // Share the social graph to make it globally accessible
         transfer::share_object(social_graph);
     }
+    
+    #[test_only]
+    /// Initialize the social graph for testing
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx)
+    }
 
     /// Follow a profile by address
     public entry fun follow(
