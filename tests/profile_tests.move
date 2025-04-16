@@ -275,7 +275,7 @@ module social_contracts::profile_tests {
         // User2 creates an offer on User1's profile
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -283,7 +283,6 @@ module social_contracts::profile_tests {
             
             // Create offer
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -343,7 +342,7 @@ module social_contracts::profile_tests {
         // User2 creates an offer on User1's profile
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -351,7 +350,6 @@ module social_contracts::profile_tests {
             
             // Create offer
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -461,7 +459,7 @@ module social_contracts::profile_tests {
         // User2 creates an offer on User1's profile
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -469,7 +467,6 @@ module social_contracts::profile_tests {
             
             // Create offer
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -485,12 +482,11 @@ module social_contracts::profile_tests {
         // User1 rejects the offer
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_sender<Profile>(&scenario);
             
             // Reject offer from User2
             profile::reject_or_revoke_offer(
-                &mut registry,
                 &mut profile,
                 USER2,
                 test_scenario::ctx(&mut scenario)
@@ -558,7 +554,7 @@ module social_contracts::profile_tests {
         // User2 creates an offer on User1's profile
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -566,7 +562,6 @@ module social_contracts::profile_tests {
             
             // Create offer
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -582,12 +577,11 @@ module social_contracts::profile_tests {
         // User2 revokes their own offer
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             
             // Revoke own offer
             profile::reject_or_revoke_offer(
-                &mut registry,
                 &mut profile,
                 USER2,
                 test_scenario::ctx(&mut scenario)
@@ -653,7 +647,7 @@ module social_contracts::profile_tests {
         // User1 tries to create an offer on their own profile
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_sender<Profile>(&scenario);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -661,7 +655,6 @@ module social_contracts::profile_tests {
             
             // Try to create offer on own profile (should fail)
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -784,7 +777,7 @@ module social_contracts::profile_tests {
         // User2 creates an offer on User1's profile
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -792,7 +785,6 @@ module social_contracts::profile_tests {
             
             // Create offer
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 offer_amount,
@@ -808,12 +800,11 @@ module social_contracts::profile_tests {
         // User3 (unauthorized) tries to reject the offer
         test_scenario::next_tx(&mut scenario, USER3);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             
             // Unauthorized attempt to reject User2's offer (should fail)
             profile::reject_or_revoke_offer(
-                &mut registry,
                 &mut profile,
                 USER2,
                 test_scenario::ctx(&mut scenario)
@@ -914,7 +905,7 @@ module social_contracts::profile_tests {
         // User2 tries to create an offer below the minimum
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
+            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let mut profile = test_scenario::take_from_address<Profile>(&scenario, USER1);
             let mut coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
             
@@ -922,7 +913,6 @@ module social_contracts::profile_tests {
             
             // Try to create offer below minimum (should fail)
             profile::create_offer(
-                &mut registry,
                 &mut profile,
                 &mut coins,
                 low_offer_amount,

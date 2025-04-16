@@ -174,6 +174,49 @@ module social_contracts::post {
         version: u64,
     }
 
+    /// Prediction option structure
+    public struct PredictionOption has store, copy, drop {
+        id: u8,
+        description: String,
+        total_bet: u64,  // Total MYS coins bet on this option
+    }
+
+    /// Prediction bet record
+    public struct PredictionBet has store, copy, drop {
+        user: address,
+        option_id: u8,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    /// Prediction metadata
+    public struct PredictionData has key, store {
+        id: UID,
+        post_id: address,
+        options: vector<PredictionOption>,
+        bets: vector<PredictionBet>,
+        resolved: bool,
+        winning_option_id: Option<u8>,
+        betting_end_time: Option<u64>,
+        total_bet_amount: u64,
+    }
+
+    /// Admin capability for resolving predictions
+    public struct PredictionAdminCap has key, store {
+        id: UID,
+    }
+
+    /// Global post feature configuration
+    public struct PostConfig has key {
+        id: UID,
+        /// Indicates if prediction posts are enabled
+        predictions_enabled: bool,
+        /// Prediction platform fee in basis points (100 = 1%)
+        prediction_fee_bps: u64,
+        /// Treasury address for prediction fees
+        prediction_treasury: address,
+    }
+
     /// Post created event
     public struct PostCreatedEvent has copy, drop {
         post_id: address,
@@ -302,38 +345,6 @@ module social_contracts::post {
         deleted_at: u64,
     }
 
-    /// Prediction option structure
-    public struct PredictionOption has store, copy, drop {
-        id: u8,
-        description: String,
-        total_bet: u64,  // Total MYS coins bet on this option
-    }
-
-    /// Prediction bet record
-    public struct PredictionBet has store, copy, drop {
-        user: address,
-        option_id: u8,
-        amount: u64,
-        timestamp: u64,
-    }
-
-    /// Prediction metadata
-    public struct PredictionData has key, store {
-        id: UID,
-        post_id: address,
-        options: vector<PredictionOption>,
-        bets: vector<PredictionBet>,
-        resolved: bool,
-        winning_option_id: Option<u8>,
-        betting_end_time: Option<u64>,
-        total_bet_amount: u64,
-    }
-
-    /// Admin capability for resolving predictions
-    public struct PredictionAdminCap has key, store {
-        id: UID,
-    }
-
     /// Prediction creation event
     public struct PredictionCreatedEvent has copy, drop {
         post_id: address,
@@ -376,17 +387,6 @@ module social_contracts::post {
         option_id: u8,
         original_amount: u64,
         withdrawal_amount: u64,
-    }
-
-    /// Global post feature configuration
-    public struct PostConfig has key {
-        id: UID,
-        /// Indicates if prediction posts are enabled
-        predictions_enabled: bool,
-        /// Prediction platform fee in basis points (100 = 1%)
-        prediction_fee_bps: u64,
-        /// Treasury address for prediction fees
-        prediction_treasury: address,
     }
     
     /// Initialize the post module
