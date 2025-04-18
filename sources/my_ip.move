@@ -12,7 +12,7 @@ module social_contracts::my_ip {
     use mys::table::{Self, Table};
     
     use social_contracts::profile::{Self, Profile};
-    use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::upgrade::{Self, UpgradeAdminCap};
     
     /// Error codes
     const EUnauthorized: u64 = 0;
@@ -1000,7 +1000,7 @@ module social_contracts::my_ip {
     /// Migration function for MyIP
     public entry fun migrate_my_ip(
         my_ip: &mut MyIP,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
@@ -1027,7 +1027,7 @@ module social_contracts::my_ip {
     /// Migration function for MyIPRegistry
     public entry fun migrate_registry(
         registry: &mut MyIPRegistry,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();

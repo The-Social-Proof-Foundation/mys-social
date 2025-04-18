@@ -8,7 +8,7 @@ module social_contracts::profile_tests {
     use std::option;
     
     use mys::test_scenario;
-    use social_contracts::profile::{Self, Profile, UsernameRegistry, PlatformTreasury};
+    use social_contracts::profile::{Self, Profile, UsernameRegistry, EcosystemTreasury};
     use mys::url;
     use mys::coin::{Self, Coin};
     use mys::mys::MYS;
@@ -369,7 +369,7 @@ module social_contracts::profile_tests {
         test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            let treasury = test_scenario::take_shared<PlatformTreasury>(&scenario);
+            let treasury = test_scenario::take_shared<EcosystemTreasury>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
             
             // Accept offer from User2
@@ -712,7 +712,7 @@ module social_contracts::profile_tests {
         test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            let treasury = test_scenario::take_shared<PlatformTreasury>(&scenario);
+            let treasury = test_scenario::take_shared<EcosystemTreasury>(&scenario);
             let profile = test_scenario::take_from_sender<Profile>(&scenario);
             
             // Try to accept non-existent offer (should fail)

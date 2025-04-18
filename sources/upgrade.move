@@ -19,7 +19,7 @@ module social_contracts::upgrade {
     // Object type constants removed to avoid dependencies
 
     /// Admin capability for package upgrades
-    public struct AdminCap has key, store {
+    public struct UpgradeAdminCap has key, store {
         id: object::UID
     }
 
@@ -44,7 +44,7 @@ module social_contracts::upgrade {
         let publisher = tx_context::sender(ctx);
         
         // Create admin capability
-        let admin_cap = AdminCap {
+        let admin_cap = UpgradeAdminCap {
             id: object::new(ctx)
         };
         
@@ -62,7 +62,7 @@ module social_contracts::upgrade {
         let publisher = tx_context::sender(ctx);
         
         // Create admin capability
-        let admin_cap = AdminCap {
+        let admin_cap = UpgradeAdminCap {
             id: object::new(ctx)
         };
         

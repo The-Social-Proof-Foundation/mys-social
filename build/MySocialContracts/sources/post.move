@@ -18,7 +18,7 @@ module social_contracts::post {
     use social_contracts::profile::UsernameRegistry;
     use social_contracts::platform;
     use social_contracts::block_list::{Self, BlockListRegistry};
-    use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::upgrade::{Self, UpgradeAdminCap};
     use social_contracts::my_ip::{Self, MyIPRegistry};
 
     /// Error codes
@@ -50,6 +50,7 @@ module social_contracts::post {
     const EQuotesNotAllowed: u64 = 25;
     const ETipsNotAllowed: u64 = 26;
     const ELicenseNotRegistered: u64 = 27;
+    const EInvalidConfig: u64 = 28;
 
     /// Constants for size limits
     const MAX_CONTENT_LENGTH: u64 = 5000; // 5000 chars max for content
@@ -202,7 +203,7 @@ module social_contracts::post {
     }
 
     /// Admin capability for resolving predictions
-    public struct PredictionAdminCap has key, store {
+    public struct PostAdminCap has key, store {
         id: UID,
     }
 
@@ -215,6 +216,50 @@ module social_contracts::post {
         prediction_fee_bps: u64,
         /// Treasury address for prediction fees
         prediction_treasury: address,
+        /// Maximum character length for post content
+        max_content_length: u64,
+        /// Maximum number of media URLs per post
+        max_media_urls: u64,
+        /// Maximum number of mentions in a post
+        max_mentions: u64,
+        /// Maximum size for post metadata in bytes
+        max_metadata_size: u64,
+        /// Maximum length for report descriptions
+        max_description_length: u64,
+        /// Maximum length for reactions
+        max_reaction_length: u64,
+        /// Percentage of tip that goes to commenter (remainder to post owner)
+        commenter_tip_percentage: u64,
+        /// Percentage of tip that goes to reposter (remainder to original post owner)
+        repost_tip_percentage: u64,
+        /// Maximum number of prediction options
+        max_prediction_options: u64,
+    }
+
+    /// Event emitted when post parameters are updated
+    public struct PostParametersUpdatedEvent has copy, drop {
+        /// Who performed the update
+        updated_by: address,
+        /// When the update occurred
+        timestamp: u64,
+        /// New max content length value
+        max_content_length: u64,
+        /// New max media URLs value
+        max_media_urls: u64, 
+        /// New max mentions value
+        max_mentions: u64,
+        /// New max metadata size value
+        max_metadata_size: u64,
+        /// New max description length value
+        max_description_length: u64,
+        /// New max reaction length value
+        max_reaction_length: u64,
+        /// New commenter tip percentage value
+        commenter_tip_percentage: u64,
+        /// New repost tip percentage value
+        repost_tip_percentage: u64,
+        /// New max prediction options value
+        max_prediction_options: u64,
     }
 
     /// Post created event
@@ -229,6 +274,7 @@ module social_contracts::post {
     }
 
     /// Comment created event
+    #[allow(unused_field)]
     public struct CommentCreatedEvent has copy, drop {
         comment_id: address,
         post_id: address,
@@ -400,11 +446,20 @@ module social_contracts::post {
                 predictions_enabled: false, // Predictions disabled by default
                 prediction_fee_bps: 500, // Default 5% fee
                 prediction_treasury: sender, // Initially set to publisher
+                max_content_length: MAX_CONTENT_LENGTH,
+                max_media_urls: MAX_MEDIA_URLS,
+                max_mentions: MAX_MENTIONS,
+                max_metadata_size: MAX_METADATA_SIZE,
+                max_description_length: MAX_DESCRIPTION_LENGTH,
+                max_reaction_length: MAX_REACTION_LENGTH,
+                commenter_tip_percentage: COMMENTER_TIP_PERCENTAGE,
+                repost_tip_percentage: REPOST_TIP_PERCENTAGE,
+                max_prediction_options: MAX_PREDICTION_OPTIONS,
             }
         );
         
         // Create and transfer the admin capability to the module publisher
-        let admin_cap = PredictionAdminCap {
+        let admin_cap = PostAdminCap {
             id: object::new(ctx),
         };
         
@@ -452,7 +507,7 @@ module social_contracts::post {
     /// Create a new prediction post
     public entry fun create_prediction_post(
         config: &PostConfig,
-        _admin_cap: &PredictionAdminCap,
+        _admin_cap: &PostAdminCap,
         registry: &UsernameRegistry,
         platform: &platform::Platform,
         block_list_registry: &block_list::BlockListRegistry,
@@ -486,17 +541,17 @@ module social_contracts::post {
         assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
         
         // Validate content length
-        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        assert!(string::length(&content) <= config.max_content_length, EContentTooLarge);
         
         // Validate options
         let options_length = vector::length(&options);
         assert!(options_length > 0, EPredictionOptionsEmpty);
-        assert!(options_length <= MAX_PREDICTION_OPTIONS, EPredictionOptionsTooMany);
+        assert!(options_length <= config.max_prediction_options, EPredictionOptionsTooMany);
         
         // Validate metadata size if provided
         if (option::is_some(&metadata_json)) {
             let metadata_ref = option::borrow(&metadata_json);
-            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+            assert!(string::length(metadata_ref) <= config.max_metadata_size, EContentTooLarge);
         };
         
         // Convert and validate media URLs if provided
@@ -504,7 +559,7 @@ module social_contracts::post {
             let urls_bytes = option::extract(&mut media_urls);
             
             // Validate media URLs count
-            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
+            assert!(vector::length(&urls_bytes) <= config.max_media_urls, ETooManyMediaUrls);
             
             // Convert media URL bytes to Url
             let mut urls = vector::empty<Url>();
@@ -523,7 +578,7 @@ module social_contracts::post {
         // Validate mentions if provided
         if (option::is_some(&mentions)) {
             let mentions_ref = option::borrow(&mentions);
-            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
+            assert!(vector::length(mentions_ref) <= config.max_mentions, EContentTooLarge);
         };
         
         // Create the post with prediction type
@@ -810,7 +865,7 @@ module social_contracts::post {
     /// Resolve a prediction (admin only) and distribute winnings
     public entry fun resolve_prediction(
         config: &PostConfig,
-        _admin_cap: &PredictionAdminCap,
+        _admin_cap: &PostAdminCap,
         post: &Post,
         prediction_data: &mut PredictionData,
         winning_option_id: u8,
@@ -1008,6 +1063,7 @@ module social_contracts::post {
         registry: &UsernameRegistry,
         platform: &platform::Platform,
         block_list_registry: &block_list::BlockListRegistry,
+        config: &PostConfig,
         content: String,
         mut media_urls: Option<vector<vector<u8>>>,
         mentions: Option<vector<address>>,
@@ -1033,21 +1089,21 @@ module social_contracts::post {
         let platform_address = object::uid_to_address(platform::id(platform));
         assert!(!block_list::is_blocked(block_list_registry, platform_address, owner), EUserBlockedByPlatform);
         
-        // Validate content length
-        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        // Validate content length using config
+        assert!(string::length(&content) <= config.max_content_length, EContentTooLarge);
         
         // Validate metadata size if provided
         if (option::is_some(&metadata_json)) {
             let metadata_ref = option::borrow(&metadata_json);
-            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+            assert!(string::length(metadata_ref) <= config.max_metadata_size, EContentTooLarge);
         };
         
         // Convert and validate media URLs if provided
         let media_option = if (option::is_some(&media_urls)) {
             let urls_bytes = option::extract(&mut media_urls);
             
-            // Validate media URLs count
-            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
+            // Validate media URLs count using config
+            assert!(vector::length(&urls_bytes) <= config.max_media_urls, ETooManyMediaUrls);
             
             // Convert media URL bytes to Url
             let mut urls = vector::empty<Url>();
@@ -1063,10 +1119,10 @@ module social_contracts::post {
             option::none<vector<Url>>()
         };
         
-        // Validate mentions if provided
+        // Validate mentions if provided using config
         if (option::is_some(&mentions)) {
             let mentions_ref = option::borrow(&mentions);
-            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
+            assert!(vector::length(mentions_ref) <= config.max_mentions, EContentTooLarge);
         };
         
         // Create and share the post
@@ -1102,6 +1158,7 @@ module social_contracts::post {
         platform: &platform::Platform,
         block_list_registry: &BlockListRegistry,
         my_ip_registry: &MyIPRegistry,
+        config: &PostConfig,
         parent_post: &mut Post,
         parent_comment_id: Option<address>,
         content: String,
@@ -1134,21 +1191,21 @@ module social_contracts::post {
             assert!(my_ip::registry_is_commenting_allowed(my_ip_registry, post_my_ip_id, ctx), ECommentsNotAllowed);
         };
         
-        // Validate content length
-        assert!(string::length(&content) <= MAX_CONTENT_LENGTH, EContentTooLarge);
+        // Validate content length using config
+        assert!(string::length(&content) <= config.max_content_length, EContentTooLarge);
         
         // Validate metadata size if provided
         if (option::is_some(&metadata_json)) {
             let metadata_ref = option::borrow(&metadata_json);
-            assert!(string::length(metadata_ref) <= MAX_METADATA_SIZE, EContentTooLarge);
+            assert!(string::length(metadata_ref) <= config.max_metadata_size, EContentTooLarge);
         };
         
         // Convert and validate media URLs if provided
         let media_option = if (option::is_some(&media_urls)) {
             let urls_bytes = option::extract(&mut media_urls);
             
-            // Validate media URLs count
-            assert!(vector::length(&urls_bytes) <= MAX_MEDIA_URLS, ETooManyMediaUrls);
+            // Validate media URLs count using config
+            assert!(vector::length(&urls_bytes) <= config.max_media_urls, ETooManyMediaUrls);
             
             // Convert media URL bytes to Url objects
             let mut urls = vector::empty<Url>();
@@ -1164,10 +1221,10 @@ module social_contracts::post {
             option::none<vector<Url>>()
         };
         
-        // Validate mentions if provided
+        // Validate mentions if provided using config
         if (option::is_some(&mentions)) {
             let mentions_ref = option::borrow(&mentions);
-            assert!(vector::length(mentions_ref) <= MAX_MENTIONS, EContentTooLarge);
+            assert!(vector::length(mentions_ref) <= config.max_mentions, EContentTooLarge);
         };
         
         // Get parent post ID
@@ -1555,13 +1612,14 @@ module social_contracts::post {
     public entry fun react_to_post(
         post: &mut Post,
         registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
+        config: &PostConfig, // Add config parameter
         reaction: String,
         ctx: &mut TxContext
     ) {
         let user = tx_context::sender(ctx);
         
-        // Validate reaction length
-        assert!(string::length(&reaction) <= MAX_REACTION_LENGTH, EReactionContentTooLong);
+        // Validate reaction length using config
+        assert!(string::length(&reaction) <= config.max_reaction_length, EReactionContentTooLong);
         
         // Check IP licensing permissions if MyIP is attached
         if (option::is_some(&post.my_ip_id)) {
@@ -1697,6 +1755,7 @@ module social_contracts::post {
         post: &mut Post, // The repost
         original_post: &mut Post, // The original post
         my_ip_registry: &my_ip::MyIPRegistry, // Added MyIPRegistry parameter
+        config: &PostConfig,
         coin: &mut Coin<MYS>,
         amount: u64,
         ctx: &mut TxContext
@@ -1759,8 +1818,8 @@ module social_contracts::post {
                 }
             };
             
-            // Calculate split - 50/50 between repost owner and original post owner
-            let repost_owner_amount = (amount * REPOST_TIP_PERCENTAGE) / 100;
+            // Calculate split using config instead of constant
+            let repost_owner_amount = (amount * config.repost_tip_percentage) / 100;
             let original_owner_amount = amount - repost_owner_amount;
             
             // Extract and split coins
@@ -1803,6 +1862,7 @@ module social_contracts::post {
         comment: &mut Comment,
         post: &mut Post,
         my_ip_registry: &my_ip::MyIPRegistry,
+        config: &PostConfig,
         coin: &mut Coin<MYS>,
         amount: u64,
         ctx: &mut TxContext
@@ -1836,8 +1896,8 @@ module social_contracts::post {
         // Extract tip amount from tipper's coin
         let mut tip_coin = coin::split(coin, amount, ctx);
         
-        // Calculate split based on constant percentage
-        let commenter_amount = (amount * COMMENTER_TIP_PERCENTAGE) / 100;
+        // Calculate split based on config percentage instead of constant
+        let commenter_amount = (amount * config.commenter_tip_percentage) / 100;
         let post_owner_amount = amount - commenter_amount;
         
         // Split the tip
@@ -2321,11 +2381,20 @@ module social_contracts::post {
                 predictions_enabled: true, // Enable predictions for testing
                 prediction_fee_bps: 500, // Default 5% fee
                 prediction_treasury: tx_context::sender(ctx), // Set to sender
+                max_content_length: MAX_CONTENT_LENGTH,
+                max_media_urls: MAX_MEDIA_URLS,
+                max_mentions: MAX_MENTIONS,
+                max_metadata_size: MAX_METADATA_SIZE,
+                max_description_length: MAX_DESCRIPTION_LENGTH,
+                max_reaction_length: MAX_REACTION_LENGTH,
+                commenter_tip_percentage: COMMENTER_TIP_PERCENTAGE,
+                repost_tip_percentage: REPOST_TIP_PERCENTAGE,
+                max_prediction_options: MAX_PREDICTION_OPTIONS,
             }
         );
         
         // Create and transfer the admin capability for testing
-        let admin_cap = PredictionAdminCap {
+        let admin_cap = PostAdminCap {
             id: object::new(ctx),
         };
         
@@ -2433,7 +2502,7 @@ module social_contracts::post {
         ctx: &mut TxContext
     ): address {
         // Create a new admin cap for testing
-        let admin_cap = PredictionAdminCap {
+        let admin_cap = PostAdminCap {
             id: object::new(ctx),
         };
         
@@ -2521,7 +2590,7 @@ module social_contracts::post {
     /// Migration function for Post
     public entry fun migrate_post(
         post: &mut Post,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
@@ -2548,7 +2617,7 @@ module social_contracts::post {
     /// Migration function for Comment
     public entry fun migrate_comment(
         comment: &mut Comment,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
@@ -2575,7 +2644,7 @@ module social_contracts::post {
     /// Migration function for Repost
     public entry fun migrate_repost(
         repost: &mut Repost,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
@@ -2662,5 +2731,54 @@ module social_contracts::post {
         
         // Increment comment count
         post.comment_count = post.comment_count + 1;
+    }
+
+    /// Update post parameters (admin only)
+    public entry fun update_post_parameters(
+        _admin_cap: &PostAdminCap,
+        config: &mut PostConfig,
+        max_content_length: u64,
+        max_media_urls: u64,
+        max_mentions: u64,
+        max_metadata_size: u64,
+        max_description_length: u64,
+        max_reaction_length: u64,
+        commenter_tip_percentage: u64,
+        repost_tip_percentage: u64,
+        max_prediction_options: u64,
+        ctx: &mut TxContext
+    ) {
+        // Validation
+        assert!(commenter_tip_percentage <= 100, EInvalidConfig);
+        assert!(repost_tip_percentage <= 100, EInvalidConfig);
+        assert!(max_content_length > 0, EInvalidConfig);
+        assert!(max_media_urls > 0, EInvalidConfig);
+        assert!(max_mentions > 0, EInvalidConfig);
+        
+        // Update config
+        config.max_content_length = max_content_length;
+        config.max_media_urls = max_media_urls;
+        config.max_mentions = max_mentions;
+        config.max_metadata_size = max_metadata_size;
+        config.max_description_length = max_description_length;
+        config.max_reaction_length = max_reaction_length;
+        config.commenter_tip_percentage = commenter_tip_percentage;
+        config.repost_tip_percentage = repost_tip_percentage;
+        config.max_prediction_options = max_prediction_options;
+        
+        // Emit update event
+        event::emit(PostParametersUpdatedEvent {
+            updated_by: tx_context::sender(ctx),
+            timestamp: tx_context::epoch_timestamp_ms(ctx),
+            max_content_length,
+            max_media_urls,
+            max_mentions,
+            max_metadata_size,
+            max_description_length,
+            max_reaction_length,
+            commenter_tip_percentage,
+            repost_tip_percentage,
+            max_prediction_options,
+        });
     }
 }

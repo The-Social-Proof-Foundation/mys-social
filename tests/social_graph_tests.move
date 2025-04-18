@@ -15,7 +15,7 @@ module social_contracts::social_graph_tests {
     
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::social_graph::{Self, SocialGraph};
-    use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::upgrade::{Self, UpgradeAdminCap};
     
     // Test addresses
     const ADMIN: address = @0xAD;
@@ -514,7 +514,7 @@ module social_contracts::social_graph_tests {
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let social_graph = test_scenario::take_shared<SocialGraph>(&scenario);
-            let admin_cap = test_scenario::take_from_sender<AdminCap>(&scenario);
+            let admin_cap = test_scenario::take_from_sender<UpgradeAdminCap>(&scenario);
             
             // Just check the initial version
             assert!(social_graph::version(&social_graph) == 1, 1);

@@ -33,9 +33,10 @@ module social_contracts::profile {
     const EInsufficientTokens: u64 = 10;
     const EUnauthorizedOfferAction: u64 = 11;
     const EOfferBelowMinimum: u64 = 12;
-    const PROFILE_SALE_FEE_BPS: u64 = 500;
     const EBadgeNotFound: u64 = 13;
     const EBadgeAlreadyExists: u64 = 14;
+
+    const PROFILE_SALE_FEE_BPS: u64 = 500;
 
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -68,8 +69,8 @@ module social_contracts::profile {
     // Field name for offers
     const OFFERS_FIELD: vector<u8> = b"profile_offers";
 
-    /// Social Platform Treasury that receives fees from profile sales
-    public struct PlatformTreasury has key {
+    /// Social Ecosystem Treasury that receives fees from profile sales
+    public struct EcosystemTreasury has key {
         id: UID,
         /// Treasury address that receives fees
         treasury_address: address,
@@ -308,8 +309,8 @@ module social_contracts::profile {
             version: current_version,
         };
         
-        // Create the platform treasury owned by the contract deployer
-        let treasury = PlatformTreasury {
+        // Create the Ecosystem treasury owned by the contract deployer
+        let treasury = EcosystemTreasury {
             id: object::new(ctx),
             treasury_address: tx_context::sender(ctx),
         };
@@ -1068,7 +1069,7 @@ module social_contracts::profile {
     public entry fun accept_offer(
         registry: &mut UsernameRegistry,
         mut profile: Profile,
-        treasury: &PlatformTreasury,
+        treasury: &EcosystemTreasury,
         offeror: address,
         new_main_profile: Option<address>,
         ctx: &mut TxContext
@@ -1101,7 +1102,7 @@ module social_contracts::profile {
         // Split the fee amount to send to the treasury
         let fee_payment = coin::split(&mut payment, fee_amount, ctx);
         
-        // Send the fee to the platform treasury
+        // Send the fee to the treasury treasury
         transfer::public_transfer(fee_payment, treasury.treasury_address);
         
         // Send the remaining amount to the profile owner
@@ -1265,8 +1266,8 @@ module social_contracts::profile {
         table::length(offers) > 0
     }
 
-    /// Get the treasury address from the PlatformTreasury
-    public fun get_treasury_address(treasury: &PlatformTreasury): address {
+    /// Get the treasury address from the EcosystemTreasury
+    public fun get_treasury_address(treasury: &EcosystemTreasury): address {
         treasury.treasury_address
     }
 
@@ -1280,11 +1281,10 @@ module social_contracts::profile {
         &mut registry.version
     }
 
-    /// Migrate the registry to a new version
-    /// Only callable by the admin with the AdminCap
+    /// Migration function for the registry
     public entry fun migrate_registry(
         registry: &mut UsernameRegistry,
-        _: &upgrade::AdminCap,
+        _: &upgrade::UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();

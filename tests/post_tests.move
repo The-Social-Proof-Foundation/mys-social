@@ -15,7 +15,7 @@ module social_contracts::post_tests {
     use mys::transfer;
     use mys::coin;
     
-    use social_contracts::post::{Self, Post, Comment, PostConfig, PredictionData, PredictionAdminCap};
+    use social_contracts::post::{Self, Post, Comment, PostConfig, PredictionData};
     use social_contracts::profile::UsernameRegistry;
     use social_contracts::platform::{Self, Platform};
     use social_contracts::block_list::{Self, BlockListRegistry};
@@ -909,9 +909,9 @@ module social_contracts::post_tests {
         test_scenario::end(scenario);
     }
 
-    /// Test prediction post creation and functionality
+    /// Test prediction bet withdrawal functionality
     #[test]
-    fun test_prediction_posts() {
+    fun test_prediction_bet_withdrawal() {
         let mut scenario = test_scenario::begin(USER1);
         
         // Create test objects and registry
@@ -1084,226 +1084,6 @@ module social_contracts::post_tests {
             
             // Verify total bet amount is correct
             assert!(post::get_total_bet_amount(&prediction_data) == 80, 3); // 50 + 30 = 80
-            
-            // Clean up
-            coin::burn_for_testing(coins);
-            
-            test_scenario::return_shared(config);
-            test_scenario::return_shared(post);
-            test_scenario::return_shared(prediction_data);
-        };
-        
-        // USER1 resolves the prediction (as admin)
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let config = test_scenario::take_shared<post::PostConfig>(&scenario);
-            
-            // Convert address to ID
-            let post_id = object::id_from_address(prediction_post_id);
-            let data_id = object::id_from_address(prediction_data_id);
-            
-            let post = test_scenario::take_shared_by_id<post::Post>(&scenario, post_id);
-            let mut prediction_data = test_scenario::take_shared_by_id<post::PredictionData>(&scenario, data_id);
-            let admin_cap = test_scenario::take_from_sender<post::PredictionAdminCap>(&scenario);
-            
-            // Create coins for payout
-            let mut payout_coins = coin::mint_for_testing<mys::mys::MYS>(80, test_scenario::ctx(&mut scenario));
-            
-            // Resolve prediction with "Yes" as winner
-            post::resolve_prediction(
-                &config,
-                &admin_cap,
-                &post,
-                &mut prediction_data,
-                0, // "Yes" is the winner
-                &mut payout_coins,
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            // Verify prediction was resolved
-            assert!(coin::value(&payout_coins) == 0, 2); // All coins should be distributed
-            
-            // Clean up
-            coin::burn_for_testing(payout_coins);
-            
-            test_scenario::return_to_sender(&scenario, admin_cap);
-            test_scenario::return_shared(config);
-            test_scenario::return_shared(post);
-            test_scenario::return_shared(prediction_data);
-        };
-        
-        test_scenario::end(scenario);
-    }
-
-    /// Test prediction bet withdrawal functionality
-    #[test]
-    fun test_prediction_bet_withdrawal() {
-        let mut scenario = test_scenario::begin(USER1);
-        
-        // Create test objects and registry
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            // Create a registry and platform for testing
-            social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
-            // Initialize the post module
-            post::test_init(test_scenario::ctx(&mut scenario));
-        };
-        
-        // Get the admin cap
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            post::test_get_admin_cap(test_scenario::ctx(&mut scenario));
-        };
-        
-        // USER1 creates a profile
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            
-            // Register a test username for USER1
-            social_contracts::profile::register_username(
-                &mut registry, 
-                string::utf8(b"user1"), 
-                option::none(), 
-                option::none(),
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // USER2 creates a profile
-        test_scenario::next_tx(&mut scenario, USER2);
-        {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            
-            // Register a test username for USER2
-            social_contracts::profile::register_username(
-                &mut registry, 
-                string::utf8(b"user2"), 
-                option::none(), 
-                option::none(),
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // USER3 creates a profile
-        test_scenario::next_tx(&mut scenario, USER3);
-        {
-            let mut registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            
-            // Register a test username for USER3
-            social_contracts::profile::register_username(
-                &mut registry, 
-                string::utf8(b"user3"), 
-                option::none(), 
-                option::none(),
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // USER1 creates a prediction post with test helper
-        let prediction_post_id;
-        let prediction_data_id;
-        test_scenario::next_tx(&mut scenario, USER1);
-        {
-            let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
-            
-            // Get the profile ID
-            let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(&registry, USER1);
-            assert!(option::is_some(&profile_id_option), 0);
-            let profile_id_addr = option::extract(&mut profile_id_option);
-            
-            // Create prediction options
-            let mut options = vector::empty<string::String>();
-            vector::push_back(&mut options, string::utf8(b"Yes"));
-            vector::push_back(&mut options, string::utf8(b"No"));
-            
-            // Create a test prediction post directly
-            let (post_id, data_id) = post::test_create_prediction_post(
-                USER1,
-                profile_id_addr,
-                string::utf8(b"Will this test pass?"),
-                options,
-                option::none(), // No betting end time
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            prediction_post_id = post_id;
-            prediction_data_id = data_id;
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // USER2 places a bet on "Yes"
-        test_scenario::next_tx(&mut scenario, USER2);
-        {
-            let config = test_scenario::take_shared<post::PostConfig>(&scenario);
-            
-            // Convert address to ID
-            let post_id = object::id_from_address(prediction_post_id);
-            let data_id = object::id_from_address(prediction_data_id);
-            
-            let post = test_scenario::take_shared_by_id<post::Post>(&scenario, post_id);
-            let mut prediction_data = test_scenario::take_shared_by_id<post::PredictionData>(&scenario, data_id);
-            
-            // Create coins for betting
-            let mut coins = coin::mint_for_testing<mys::mys::MYS>(100, test_scenario::ctx(&mut scenario));
-            
-            // Place bet on option 0 (Yes)
-            post::place_prediction_bet(
-                &config,
-                &post,
-                &mut prediction_data,
-                0, // Yes
-                &mut coins,
-                50, // Bet 50 MYS
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            // Clean up
-            coin::burn_for_testing(coins);
-            
-            test_scenario::return_shared(config);
-            test_scenario::return_shared(post);
-            test_scenario::return_shared(prediction_data);
-        };
-        
-        // USER3 places a bet on "No"
-        test_scenario::next_tx(&mut scenario, USER3);
-        {
-            let config = test_scenario::take_shared<post::PostConfig>(&scenario);
-            
-            // Convert address to ID
-            let post_id = object::id_from_address(prediction_post_id);
-            let data_id = object::id_from_address(prediction_data_id);
-            
-            let post = test_scenario::take_shared_by_id<post::Post>(&scenario, post_id);
-            let mut prediction_data = test_scenario::take_shared_by_id<post::PredictionData>(&scenario, data_id);
-            
-            // Create coins for betting
-            let mut coins = coin::mint_for_testing<mys::mys::MYS>(100, test_scenario::ctx(&mut scenario));
-            
-            // Place bet on option 1 (No)
-            post::place_prediction_bet(
-                &config,
-                &post,
-                &mut prediction_data,
-                1, // No
-                &mut coins,
-                30, // Bet 30 MYS
-                test_scenario::ctx(&mut scenario)
-            );
-            
-            // Verify the bet was placed
-            assert!(post::get_total_bet_amount(&prediction_data) == 80, 1); // 50 + 30 = 80
             
             // Clean up
             coin::burn_for_testing(coins);

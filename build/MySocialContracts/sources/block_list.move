@@ -11,7 +11,7 @@ module social_contracts::block_list {
     use mys::dynamic_field;
     use std::string;
     
-    use social_contracts::upgrade::{Self, AdminCap};
+    use social_contracts::upgrade::{Self, UpgradeAdminCap};
     
     /// Error codes
     const EAlreadyBlocked: u64 = 1;
@@ -337,7 +337,7 @@ module social_contracts::block_list {
     /// Migration function for BlockList
     public entry fun migrate_block_list(
         block_list: &mut BlockList,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut tx_context::TxContext
     ) {
         let current_version = upgrade::current_version();
@@ -364,7 +364,7 @@ module social_contracts::block_list {
     /// Migration function for BlockListRegistry
     public entry fun migrate_block_list_registry(
         registry: &mut BlockListRegistry,
-        _: &AdminCap,
+        _: &UpgradeAdminCap,
         ctx: &mut tx_context::TxContext
     ) {
         let current_version = upgrade::current_version();

@@ -158,7 +158,7 @@ module social_contracts::social_graph {
     /// Only callable by the admin with the AdminCap
     public entry fun migrate_social_graph(
         social_graph: &mut SocialGraph,
-        _: &upgrade::AdminCap,
+        _: &upgrade::UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
