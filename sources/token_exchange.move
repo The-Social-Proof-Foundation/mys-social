@@ -404,48 +404,6 @@ module social_contracts::token_exchange {
 
     // === Admin Functions ===
 
-    /// Update exchange configuration with default viral thresholds and auction durations
-    public entry fun update_config(
-        _admin_cap: &ExchangeAdminCap,
-        config: &mut ExchangeConfig,
-        total_fee_bps: u64, 
-        creator_fee_bps: u64,
-        platform_fee_bps: u64,
-        treasury_fee_bps: u64,
-        base_price: u64,
-        quadratic_coefficient: u64,
-        ecosystem_treasury: address,
-        max_hold_percent_bps: u64,
-        ctx: &mut TxContext
-    ) {
-        // Call the full configuration update with default values for the remaining parameters
-        update_exchange_config(
-            _admin_cap,
-            config,
-            total_fee_bps,
-            creator_fee_bps,
-            platform_fee_bps,
-            treasury_fee_bps,
-            base_price,
-            quadratic_coefficient,
-            ecosystem_treasury,
-            max_hold_percent_bps,
-            POST_LIKES_WEIGHT,
-            POST_COMMENTS_WEIGHT,
-            POST_TIPS_WEIGHT,
-            POST_VIRAL_THRESHOLD,
-            PROFILE_FOLLOWS_WEIGHT,
-            PROFILE_POSTS_WEIGHT,
-            PROFILE_TIPS_WEIGHT,
-            PROFILE_VIRAL_THRESHOLD,
-            MIN_POST_AUCTION_DURATION,
-            MAX_POST_AUCTION_DURATION,
-            MIN_PROFILE_AUCTION_DURATION,
-            MAX_PROFILE_AUCTION_DURATION,
-            ctx
-        )
-    }
-
     /// Update exchange configuration
     public entry fun update_exchange_config(
         _admin_cap: &ExchangeAdminCap,
