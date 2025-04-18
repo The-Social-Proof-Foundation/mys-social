@@ -113,6 +113,8 @@ module social_contracts::profile {
         phone: Option<String>,
         /// Email as encrypted string (optional)
         email: Option<String>,
+        /// Is email verified flag
+        is_email_verified: bool,
         /// Gender as encrypted string (optional)
         gender: Option<String>,
         /// Political view as encrypted string (optional)
@@ -236,6 +238,7 @@ module social_contracts::profile {
         raised_location: Option<String>,
         phone: Option<String>,
         email: Option<String>,
+        is_email_verified: bool,
         gender: Option<String>,
         political_view: Option<String>,
         religion: Option<String>,
@@ -456,6 +459,7 @@ module social_contracts::profile {
             raised_location: option::none(),
             phone: option::none(),
             email: option::none(),
+            is_email_verified: false,
             gender: option::none(),
             political_view: option::none(),
             religion: option::none(),
@@ -595,6 +599,7 @@ module social_contracts::profile {
             raised_location: profile.raised_location,
             phone: profile.phone,
             email: profile.email,
+            is_email_verified: profile.is_email_verified,
             gender: profile.gender,
             political_view: profile.political_view,
             religion: profile.religion,
@@ -781,6 +786,7 @@ module social_contracts::profile {
             raised_location: profile.raised_location,
             phone: profile.phone,
             email: profile.email,
+            is_email_verified: profile.is_email_verified,
             gender: profile.gender,
             political_view: profile.political_view,
             religion: profile.religion,
@@ -1170,6 +1176,7 @@ module social_contracts::profile {
             raised_location: profile.raised_location,
             phone: profile.phone,
             email: profile.email,
+            is_email_verified: profile.is_email_verified,
             gender: profile.gender,
             political_view: profile.political_view,
             religion: profile.religion,
@@ -1353,6 +1360,7 @@ module social_contracts::profile {
             raised_location: option::none(),
             phone: option::none(),
             email: option::none(),
+            is_email_verified: false,
             gender: option::none(),
             political_view: option::none(),
             religion: option::none(),
@@ -1548,5 +1556,74 @@ module social_contracts::profile {
     /// Count the number of badges a profile has
     public fun badge_count(profile: &Profile): u64 {
         vector::length(&profile.badges)
+    }
+    
+    /// Get whether the email is verified for a profile
+    public fun is_email_verified(profile: &Profile): bool {
+        profile.is_email_verified
+    }
+    
+    /// Toggle the email verification status for a profile
+    /// Only the admin with the UpgradeAdminCap can call this function
+    public entry fun toggle_email_verification(
+        profile: &mut Profile,
+        _admin_cap: &upgrade::UpgradeAdminCap,
+        is_verified: bool,
+        ctx: &mut TxContext
+    ) {
+        // Admin check is implicit through the requirement of the UpgradeAdminCap
+        let _admin = tx_context::sender(ctx);
+        
+        // Update the email verification status
+        profile.is_email_verified = is_verified;
+        
+        // Get the profile ID for the event
+        let profile_id = object::uid_to_address(&profile.id);
+        
+        // Emit profile updated event to reflect the change in verification status
+        event::emit(ProfileUpdatedEvent {
+            profile_id,
+            display_name: profile.display_name,
+            username: if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
+                option::some(*dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD))
+            } else {
+                option::none()
+            },
+            bio: profile.bio,
+            profile_picture: if (option::is_some(&profile.profile_picture)) {
+                let url = option::borrow(&profile.profile_picture);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            cover_photo: if (option::is_some(&profile.cover_photo)) {
+                let url = option::borrow(&profile.cover_photo);
+                option::some(ascii_to_string(url::inner_url(url)))
+            } else {
+                option::none()
+            },
+            owner: profile.owner,
+            updated_at: tx_context::epoch(ctx),
+            // Include all sensitive fields
+            birthdate: profile.birthdate,
+            current_location: profile.current_location,
+            raised_location: profile.raised_location,
+            phone: profile.phone,
+            email: profile.email,
+            is_email_verified: profile.is_email_verified,
+            gender: profile.gender,
+            political_view: profile.political_view,
+            religion: profile.religion,
+            education: profile.education,
+            website: profile.website,
+            primary_language: profile.primary_language,
+            relationship_status: profile.relationship_status,
+            x_username: profile.x_username,
+            mastodon_username: profile.mastodon_username,
+            facebook_username: profile.facebook_username,
+            reddit_username: profile.reddit_username,
+            github_username: profile.github_username,
+            min_offer_amount: profile.min_offer_amount,
+        });
     }
 }

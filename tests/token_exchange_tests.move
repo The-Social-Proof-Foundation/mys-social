@@ -87,7 +87,7 @@ module social_contracts::token_exchange_tests {
             
             let ecosystem_treasury = @0x67890;
             
-            token_exchange::update_config(
+            token_exchange::update_exchange_config(
                 &admin_cap,
                 &mut config,
                 200, // total_fee_bps (2%)
@@ -98,6 +98,18 @@ module social_contracts::token_exchange_tests {
                 200_000,     // quadratic_coefficient (doubled)
                 ecosystem_treasury,
                 1000, // max_hold_percent_bps (10%)
+                10, // post_likes_weight
+                5,  // post_comments_weight
+                15, // post_tips_weight
+                100, // post_viral_threshold
+                10, // profile_follows_weight
+                5,  // profile_posts_weight
+                15, // profile_tips_weight
+                100, // profile_viral_threshold
+                3600, // min_post_auction_duration (1 hour)
+                86400, // max_post_auction_duration (24 hours)
+                86400, // min_profile_auction_duration (1 day)
+                604800, // max_profile_auction_duration (7 days)
                 test_scenario::ctx(&mut scenario)
             );
             
@@ -195,7 +207,7 @@ module social_contracts::token_exchange_tests {
             let admin_cap = test_scenario::take_from_sender<token_exchange::ExchangeAdminCap>(&scenario);
             let mut config = test_scenario::take_shared<token_exchange::ExchangeConfig>(&scenario);
             
-            token_exchange::update_config(
+            token_exchange::update_exchange_config(
                 &admin_cap,
                 &mut config,
                 150, // total_fee_bps 
@@ -206,6 +218,18 @@ module social_contracts::token_exchange_tests {
                 100_000,     // quadratic_coefficient
                 ECOSYSTEM_TREASURY,
                 500, // max_hold_percent_bps (5%)
+                10, // post_likes_weight
+                5,  // post_comments_weight
+                15, // post_tips_weight
+                100, // post_viral_threshold
+                10, // profile_follows_weight
+                5,  // profile_posts_weight
+                15, // profile_tips_weight
+                100, // profile_viral_threshold
+                3600, // min_post_auction_duration (1 hour)
+                86400, // max_post_auction_duration (24 hours)
+                86400, // min_profile_auction_duration (1 day)
+                604800, // max_profile_auction_duration (7 days)
                 test_scenario::ctx(&mut scenario)
             );
             
