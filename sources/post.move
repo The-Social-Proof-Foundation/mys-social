@@ -156,8 +156,24 @@ module social_contracts::post {
         my_ip_id: Option<address>,
         /// Optional promotion data ID for promoted posts
         promotion_id: Option<address>,
+        /// Opt-out flag to disable auto SPT pool initialization by SPoT
+        disable_auto_pool: bool,
         /// Version for upgrades
         version: u64,
+    }
+
+    /// Query: per-post opt-out for auto SPT pool init
+    public fun is_auto_pool_disabled(post: &Post): bool { post.disable_auto_pool }
+
+    /// Owner-only: set per-post opt-out flag
+    public entry fun set_auto_pool_disabled(
+        post: &mut Post,
+        disabled: bool,
+        ctx: &mut TxContext
+    ) {
+        let caller = tx_context::sender(ctx);
+        assert!(caller == post.owner, EUnauthorized);
+        post.disable_auto_pool = disabled;
     }
 
     /// Comment object for posts, supporting nested comments
@@ -1211,6 +1227,7 @@ module social_contracts::post {
             revenue_redirect_percentage,
             my_ip_id,
             promotion_id,
+            disable_auto_pool: false,
             version: upgrade::current_version(),
         };
         
@@ -1728,6 +1745,7 @@ module social_contracts::post {
             revenue_redirect_percentage: _,
             my_ip_id: _,
             promotion_id: _,
+            disable_auto_pool: _,
             version: _,
         } = post;
         

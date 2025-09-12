@@ -101,8 +101,6 @@ module social_contracts::social_proof_tokens {
     const DEFAULT_PROFILE_THRESHOLD: u64 = 10_000_000_000_000; // 10,000 MYS in smallest units (9 decimals)
     const DEFAULT_MAX_INDIVIDUAL_RESERVATION_BPS: u64 = 2000; // 20% (1/5 of threshold)
 
-
-
     // === Structs ===
 
     /// Admin capability for the social proof tokens system
@@ -136,6 +134,13 @@ module social_contracts::social_proof_tokens {
         max_individual_reservation_bps: u64,
         /// Emergency kill switch - when true, all trading is halted
         trading_halted: bool,
+        /// Allow auto-initialization of post token pools by package-restricted callers
+        allow_auto_pool_init: bool,
+        /// Throttle: max auto-inits per epoch (0 = unlimited)
+        auto_init_max_per_epoch: u64,
+        /// Internal counter epoch and count (for throttling)
+        auto_init_epoch: u64,
+        auto_init_count_in_epoch: u64,
     }
 
     /// Registry of all tokens in the exchange
@@ -254,6 +259,15 @@ module social_contracts::social_proof_tokens {
         name: String,
         base_price: u64,
         quadratic_coefficient: u64,
+    }
+
+    /// Event emitted when a post pool is auto-initialized by SPoT flow
+    public struct PostPoolAutoInitializedEvent has copy, drop {
+        post_id: address,
+        owner: address,
+        base_price: u64,
+        quadratic_coefficient: u64,
+        by: address,
     }
 
     /// Event emitted when tokens are bought
@@ -376,6 +390,10 @@ module social_contracts::social_proof_tokens {
                 profile_threshold: DEFAULT_PROFILE_THRESHOLD,
                 max_individual_reservation_bps: DEFAULT_MAX_INDIVIDUAL_RESERVATION_BPS,
                 trading_halted: true, // Auto-enabled by bootstrap during bootstrap
+                allow_auto_pool_init: false,
+                auto_init_max_per_epoch: 0,
+                auto_init_epoch: 0,
+                auto_init_count_in_epoch: 0,
             }
         );
         
@@ -1610,6 +1628,10 @@ module social_contracts::social_proof_tokens {
                 profile_threshold: DEFAULT_PROFILE_THRESHOLD,
                 max_individual_reservation_bps: DEFAULT_MAX_INDIVIDUAL_RESERVATION_BPS,
                 trading_halted: false,
+                allow_auto_pool_init: true,
+                auto_init_max_per_epoch: 1000,
+                auto_init_epoch: 0,
+                auto_init_count_in_epoch: 0,
             }
         );
         
@@ -1795,5 +1817,90 @@ module social_contracts::social_proof_tokens {
         SocialProofTokensAdminCap {
             id: object::new(ctx)
         }
+    }
+
+    /// Ensure a post token pool exists; if missing and allowed, create a minimal pool.
+    /// Guardrails:
+    /// - Requires config.allow_auto_pool_init = true
+    /// - Respects post.disable_auto_pool opt-out
+    /// - Throttles by epoch via auto_init_max_per_epoch
+    /// - Package visibility prevents arbitrary external calls
+    public(package) fun ensure_post_token_pool(
+        registry: &mut TokenRegistry,
+        config: &mut SocialProofTokensConfig,
+        post: &social_contracts::post::Post,
+        ctx: &mut TxContext
+    ): Option<TokenPool> {
+        // If token already exists, no-op
+        let post_id = social_contracts::post::get_id_address(post);
+        if (table::contains(&registry.tokens, post_id)) {
+            return option::none<TokenPool>()
+        };
+
+        // Trading halted check
+        assert!(!config.trading_halted, ETradingHalted);
+
+        // Global opt-in
+        assert!(config.allow_auto_pool_init, ENotAuthorized);
+
+        // Per-post opt-out
+        assert!(!social_contracts::post::is_auto_pool_disabled(post), ENotAuthorized);
+
+        // Epoch throttle (best-effort): limit creations within same epoch
+        let now_epoch = tx_context::epoch(ctx);
+        if (config.auto_init_max_per_epoch > 0) {
+            if (config.auto_init_epoch == now_epoch) {
+                assert!(config.auto_init_count_in_epoch + 1 <= config.auto_init_max_per_epoch, ETradingHalted);
+                config.auto_init_count_in_epoch = config.auto_init_count_in_epoch + 1;
+            } else {
+                config.auto_init_epoch = now_epoch;
+                config.auto_init_count_in_epoch = 1;
+            };
+        };
+
+        // Create minimal pool (initial supply = 1, no liquidity)
+        let owner = social_contracts::post::get_post_owner(post);
+        let token_info = TokenInfo {
+            id: @0x0,
+            token_type: TOKEN_TYPE_POST,
+            owner,
+            associated_id: post_id,
+            symbol: string::utf8(b"PPOST"),
+            name: string::utf8(b"Post Token"),
+            circulating_supply: 1,
+            base_price: config.base_price,
+            quadratic_coefficient: config.quadratic_coefficient,
+            created_at: now_epoch,
+        };
+
+        let pool_id = object::new(ctx);
+        let pool_address = object::uid_to_address(&pool_id);
+        let mut updated_token_info = token_info;
+        updated_token_info.id = pool_address;
+
+        let pool = TokenPool {
+            id: pool_id,
+            info: updated_token_info,
+            mys_balance: balance::zero(),
+            holders: table::new(ctx),
+            poc_redirect_to: option::none(),
+            poc_redirect_percentage: option::none(),
+            version: upgrade::current_version(),
+        };
+
+        // Register token for associated post id
+        table::add(&mut registry.tokens, post_id, updated_token_info);
+
+        // Emit audit event
+        event::emit(PostPoolAutoInitializedEvent {
+            post_id,
+            owner,
+            base_price: config.base_price,
+            quadratic_coefficient: config.quadratic_coefficient,
+            by: tx_context::sender(ctx),
+        });
+
+        // Return the unshared pool to caller so it can be used in-tx and shared after
+        option::some(pool)
     }
 } 

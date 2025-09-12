@@ -354,6 +354,74 @@ module social_contracts::platform {
             release_date: platform.release_date,
         });
         
+        // If platform wants DAO governance, create governance registry immediately
+        if (wants_dao_governance) {
+            // Use default values if options are None
+            let delegate_count = if (option::is_some(&platform.delegate_count)) {
+                *option::borrow(&platform.delegate_count)
+            } else {
+                7 // Default value
+            };
+            
+            let delegate_term_epochs = if (option::is_some(&platform.delegate_term_epochs)) {
+                *option::borrow(&platform.delegate_term_epochs)
+            } else {
+                30 // Default value
+            };
+            
+            let proposal_submission_cost = if (option::is_some(&platform.proposal_submission_cost)) {
+                *option::borrow(&platform.proposal_submission_cost)
+            } else {
+                50_000_000 // Default value
+            };
+            
+            let min_on_chain_age_days = if (option::is_some(&platform.min_on_chain_age_days)) {
+                *option::borrow(&platform.min_on_chain_age_days)
+            } else {
+                7 // Default value
+            };
+            
+            let max_votes_per_user = if (option::is_some(&platform.max_votes_per_user)) {
+                *option::borrow(&platform.max_votes_per_user)
+            } else {
+                5 // Default value
+            };
+            
+            let quadratic_base_cost = if (option::is_some(&platform.quadratic_base_cost)) {
+                *option::borrow(&platform.quadratic_base_cost)
+            } else {
+                5_000_000 // Default value
+            };
+            
+            let voting_period_epochs = if (option::is_some(&platform.voting_period_epochs)) {
+                *option::borrow(&platform.voting_period_epochs)
+            } else {
+                3 // Default value
+            };
+            
+            let quorum_votes = if (option::is_some(&platform.quorum_votes)) {
+                *option::borrow(&platform.quorum_votes)
+            } else {
+                15 // Default value
+            };
+            
+            // Create governance registry for this platform
+            let registry_id = governance::create_platform_governance(
+                delegate_count,
+                delegate_term_epochs,
+                proposal_submission_cost,
+                min_on_chain_age_days,
+                max_votes_per_user,
+                quadratic_base_cost,
+                voting_period_epochs,
+                quorum_votes,
+                ctx
+            );
+            
+            // Store registry ID in the platform
+            platform.governance_registry_id = option::some(registry_id);
+        };
+        
         // Transfer platform to developer
         transfer::transfer(platform, developer);
     }

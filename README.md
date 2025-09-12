@@ -200,6 +200,46 @@ myso client call --package 0x000000000000000000000000000000000000000000000000000
   --gas-budget 1000000000
 ```
 
+### Social Proof of Truth (SPoT)
+SPoT enables truth markets on posts by splitting each bet between AMM SPT buys and an escrow used for clean payouts.
+
+1) Create a SPoT record for a post
+```bash
+myso client call --package 0x...d880 \
+  --module social_proof_of_truth --function create_spot_record_for_post \
+  --args [SPOT_CONFIG_ID] [POST_ID] \
+  --gas-budget 1000000000
+```
+
+2) Place a bet (auto‑init post SPT pool if missing)
+```bash
+myso client call --package 0x...d880 \
+  --module social_proof_of_truth --function place_spot_bet_auto_init \
+  --args [SPOT_CONFIG_ID] [SPT_REGISTRY_ID] [SPT_CONFIG_ID] [SPOT_RECORD_ID] [POST_ID] \
+        [PLATFORM_ID] [BLOCK_LIST_REGISTRY_ID] [PAYMENT_COIN] true [AMOUNT] \
+  --gas-budget 1000000000
+```
+
+3) Resolve via Oracle (YES/NO + confidence)
+```bash
+myso client call --package 0x...d880 \
+  --module social_proof_of_truth --function oracle_resolve \
+  --args [SPOT_CONFIG_ID] [SPOT_RECORD_ID] [POST_ID] true 9000 \
+  --gas-budget 1000000000
+```
+
+4) If confidence is below threshold, finalize via DAO (YES/NO/DRAW/UNAPPLICABLE)
+```bash
+myso client call --package 0x...d880 \
+  --module social_proof_of_truth --function finalize_via_dao \
+  --args [SPOT_CONFIG_ID] [SPOT_RECORD_ID] [POST_ID] 3 \
+  --gas-budget 1000000000
+```
+
+Notes:
+- Auto‑init requires `social_proof_tokens` config `allow_auto_pool_init = true` and post not opted‑out.
+- Bets split: β to AMM buy (default 30%), (1−β) to escrow; payouts are pro‑rata from escrow minus 1% fee split 50/50 between platform/chain treasuries.
+
 **Submit a Governance Proposal:**
 ```bash
 myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
