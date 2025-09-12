@@ -1,4 +1,5 @@
 // Copyright (c) Mysten Labs, Inc.
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Module which defines hash functions. Note that Sha-256 and Sha3-256 is available in the std::hash module in the

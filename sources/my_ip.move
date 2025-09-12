@@ -1,1029 +1,704 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-/// MyIP module for the MySocial network
-/// Manages user-owned intellectual property (IP) objects with flexible licensing options
+/// Universal MyIP module for encrypted data monetization
+/// Supports both one-time purchases and subscription access
+/// Can be attached to posts (gated content) or profiles (data monetization)
 
+#[allow(duplicate_alias, unused_use, unused_const)]
 module social_contracts::my_ip {
     use std::string::{Self, String};
+    use std::option::{Self, Option};
     
-    use mys::event;
-    use mys::url::{Self, Url};
-    use mys::table::{Self, Table};
+    use mys::{
+        object::{Self, UID, ID},
+        tx_context::{Self, TxContext},
+        transfer,
+        table::{Self, Table},
+        coin::{Self, Coin},
+        balance::{Self, Balance},
+        clock::{Self, Clock},
+        event
+    };
+    use mys::mys::MYS;
     
-    use social_contracts::profile::{Self, Profile};
+    // Proper Seal encryption support
+    use seal::bf_hmac_encryption::{Self, EncryptedObject, VerifiedDerivedKey, PublicKey};
+    
     use social_contracts::upgrade::{Self, UpgradeAdminCap};
-    
-    /// Error codes
-    const EUnauthorized: u64 = 0;
-    const EInvalidLicenseType: u64 = 1;
-    const EInvalidPermission: u64 = 2;
-    const ELicenseNonTransferable: u64 = 3;
-    const EInvalidLicenseState: u64 = 4;
-    const EWrongVersion: u64 = 5;
-    const ELicenseNotRegistered: u64 = 6;
-    
-    /// License types
-    const LICENSE_TYPE_CREATIVE_COMMONS: u8 = 0;
-    const LICENSE_TYPE_TOKEN_BOUND: u8 = 1;
-    const LICENSE_TYPE_CUSTOM: u8 = 2;
-    
-    /// License states
-    const LICENSE_STATE_ACTIVE: u8 = 0;
-    const LICENSE_STATE_EXPIRED: u8 = 1;
-    const LICENSE_STATE_REVOKED: u8 = 2;
-    
-    /// Permission flags (stored as bits in a u64)
-    const PERMISSION_COMMERCIAL_USE: u64 = 1 << 0;     // 1
-    const PERMISSION_DERIVATIVES_ALLOWED: u64 = 1 << 1; // 2
-    const PERMISSION_PUBLIC_LICENSE: u64 = 1 << 2;     // 4
-    const PERMISSION_AUTHORITY_REQUIRED: u64 = 1 << 3; // 8
-    const PERMISSION_SHARE_ALIKE: u64 = 1 << 4;        // 16
-    const PERMISSION_REQUIRE_ATTRIBUTION: u64 = 1 << 5; // 32
-    const PERMISSION_REVENUE_REDIRECT: u64 = 1 << 6;   // 64
-    
-    /// Social interaction permissions - for controlling post interactions
-    const PERMISSION_ALLOW_COMMENTS: u64 = 1 << 10;    // 1024
-    const PERMISSION_ALLOW_REACTIONS: u64 = 1 << 11;   // 2048
-    const PERMISSION_ALLOW_REPOSTS: u64 = 1 << 12;     // 4096
-    const PERMISSION_ALLOW_QUOTES: u64 = 1 << 13;      // 8192
-    const PERMISSION_ALLOW_TIPS: u64 = 1 << 14;        // 16384
-    
-    /// Intellectual property object with enhanced licensing capabilities
+
+    // === Error codes ===
+    const EUnauthorized: u64 = 1;
+    const ENotForSale: u64 = 2;
+    const EPriceMismatch: u64 = 3;
+    const ESelfPurchase: u64 = 4;
+    const EAlreadyPurchased: u64 = 5;
+    const EActiveSubscription: u64 = 6;
+    const EInvalidInput: u64 = 7;
+    const ESubscriptionExpired: u64 = 8;
+    const EOverflow: u64 = 9;
+    const EInvalidTimeRange: u64 = 10;
+
+    // === Constants ===
+    const MAX_TAGS: u64 = 10;
+    const MAX_SUBSCRIPTION_DAYS: u64 = 365;
+    const MILLISECONDS_PER_DAY: u64 = 86_400_000;
+    const MAX_FREE_ACCESS_GRANTS: u64 = 100_000; // Limit free access to 100k users
+    const MAX_U64: u64 = 18446744073709551615; // Max u64 value for overflow protection
+
+    /// Universal MyIP for encrypted data monetization using proper Seal patterns
     public struct MyIP has key, store {
         id: UID,
-        /// Basic metadata
-        name: String,
-        description: String,
-        creator: address,
-        creation_time: u64,
+        owner: address,
         
-        /// License properties
-        license_type: u8,
-        permission_flags: u64,
-        license_state: u8,
+        /// Content metadata (title and description removed)
+        media_type: String,                     // "text", "audio", "image", "gif", "video", "article", "data", "statistics"
+        tags: vector<String>,                   // Searchable tags
+        platform_id: Option<address>,          // Optional platform identification
         
-        /// Optional fields
-        proof_of_creativity_id: Option<address>,
-        custom_license_uri: Option<Url>,
-        revenue_recipient: Option<address>,
-        transferable: bool,
-        expires_at: Option<u64>,
+        /// Time and context
+        timestamp_start: u64,
+        timestamp_end: Option<u64>,             // For time-range data or updates
+        created_at: u64,
+        last_updated: u64,
         
-        /// Version for upgrades
+        /// Properly sealed content using Seal encryption
+        encrypted_data: vector<u8>,             // Raw encrypted data from Seal
+        encryption_id: vector<u8>,              // Seal encryption ID for decryption
+        
+        /// Pricing options - user controlled
+        one_time_price: Option<u64>,            // Price for one-time access (0 = free)
+        subscription_price: Option<u64>,        // Price for subscription access
+        subscription_duration_days: u64,       // Subscription duration in days
+        
+        /// Access tracking
+        purchasers: Table<address, bool>,       // One-time purchase access
+        subscribers: Table<address, u64>,       // address -> expiry timestamp
+        
+        /// Extended metadata for data discovery
+        geographic_region: Option<String>,
+        data_quality: Option<String>,           // "high", "medium", "low"
+        sample_size: Option<u64>,
+        collection_method: Option<String>,
+        is_updating: bool,                      // Whether this data updates over time
+        update_frequency: Option<String>,       // "daily", "weekly", "monthly"
+        
+        /// Version for future upgrades
         version: u64,
     }
-    
-    /// Registry for MyIP licenses and their permissions
+
+    /// Registry for tracking MyIP ownership
     public struct MyIPRegistry has key {
         id: UID,
-        /// Maps license IDs to their permissions bitmap
-        permissions: Table<address, u64>,
-        /// Maps license IDs to their license types
-        license_types: Table<address, u8>,
-        /// Maps license IDs to revenue recipients (if redirected)
-        revenue_recipients: Table<address, address>,
-        /// Maps license IDs to license states (active, expired, revoked)
-        states: Table<address, u8>,
-        /// Maps license IDs to their creators
-        creators: Table<address, address>,
-        /// Maps license IDs to expiration timestamps
-        expirations: Table<address, u64>,
-        /// Version for upgrades
-        version: u64,
+        ip_to_owner: Table<address, address>,
+        version: u64,  // Added missing version field
     }
+
+    // === Events ===
     
-    /// License capability to manage licenses
-    /// This capability grants permission to modify specific licenses
-    public struct LicenseAdminCap has key, store {
-        id: UID,
-        license_id: address,
-        admin: address,
+    public struct MyIPCreatedEvent has copy, drop {
+        ip_id: address,
+        owner: address,
+        media_type: String,
+        platform_id: Option<address>,
+        one_time_price: Option<u64>,
+        subscription_price: Option<u64>,
+        created_at: u64,
     }
-    
-    /// Events
-    
-    /// Event emitted when a new license is created
-    public struct LicenseCreatedEvent has copy, drop {
-        license_id: address,
-        creator: address,
-        license_type: u8,
-        permission_flags: u64,
-        creation_time: u64,
+
+    public struct PurchaseEvent has copy, drop {
+        ip_id: address,
+        buyer: address,
+        price: u64,
+        purchase_type: String, // "one_time" or "subscription"
+        timestamp: u64,
     }
-    
-    /// Event emitted when a license is updated
-    public struct LicenseUpdatedEvent has copy, drop {
-        license_id: address,
-        updater: address,
-        old_permission_flags: u64,
-        new_permission_flags: u64,
-        update_time: u64,
+
+    public struct AccessGrantedEvent has copy, drop {
+        ip_id: address,
+        user: address,
+        access_type: String,
+        granted_by: address,
+        timestamp: u64,
     }
-    
-    /// Event emitted when a license is transferred
-    public struct LicenseTransferredEvent has copy, drop {
-        license_id: address,
-        from: address,
-        to: address,
-        transfer_time: u64,
-    }
-    
-    /// Event emitted when a license state changes
-    public struct LicenseStateChangedEvent has copy, drop {
-        license_id: address,
-        old_state: u8,
-        new_state: u8,
-        changer: address,
-        change_time: u64,
-    }
-    
-    /// Event emitted when a license is linked to a post
-    #[allow(unused_field)]
-    public struct LicenseLinkedEvent has copy, drop {
-        license_id: address,
-        post_id: address,
-        linker: address,
-        link_time: u64,
-    }
-    
-    /// Event emitted when a license is registered in the registry
-    public struct LicenseRegisteredEvent has copy, drop {
-        license_id: address,
-        registry_id: address,
-        creator: address,
-        permission_flags: u64,
-    }
-    
-    /// Module initialization
-    fun init(ctx: &mut TxContext) {
-        // Create and share the registry
+
+    // === Core Functions ===
+
+    /// Bootstrap initialization function - creates the MyIP registry
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
         let registry = MyIPRegistry {
             id: object::new(ctx),
-            permissions: table::new(ctx),
-            license_types: table::new(ctx),
-            revenue_recipients: table::new(ctx),
-            states: table::new(ctx),
-            creators: table::new(ctx),
-            expirations: table::new(ctx),
+            ip_to_owner: table::new(ctx),
             version: upgrade::current_version(),
         };
-        
-        // Share the registry
+
         transfer::share_object(registry);
     }
-    
-    /// Create a new IP object with license
+
+    /// Create new MyIP data with proper Seal encryption
     public fun create(
-        name: String,
-        description: String,
-        license_type: u8,
-        permission_flags: u64,
-        proof_of_creativity_id: Option<address>,
-        mut custom_license_uri_bytes: Option<vector<u8>>,
-        revenue_recipient: Option<address>,
-        transferable: bool,
-        expires_at: Option<u64>,
-        ctx: &mut TxContext
+        media_type: String,
+        tags: vector<String>,
+        platform_id: Option<address>,
+        timestamp_start: u64,
+        timestamp_end: Option<u64>,
+        encrypted_data: vector<u8>,  // Pre-encrypted data from client
+        encryption_id: vector<u8>,   // Seal encryption ID
+        one_time_price: Option<u64>,
+        subscription_price: Option<u64>,
+        subscription_duration_days: u64,
+        geographic_region: Option<String>,
+        data_quality: Option<String>,
+        sample_size: Option<u64>,
+        collection_method: Option<String>,
+        is_updating: bool,
+        update_frequency: Option<String>,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ): MyIP {
-        // Validate license type
-        assert!(
-            license_type == LICENSE_TYPE_CREATIVE_COMMONS ||
-            license_type == LICENSE_TYPE_TOKEN_BOUND ||
-            license_type == LICENSE_TYPE_CUSTOM,
-            EInvalidLicenseType
-        );
+        // Input validation
+        assert!(vector::length(&tags) <= MAX_TAGS, EInvalidInput);
         
-        // For custom licenses, require a custom URI
-        if (license_type == LICENSE_TYPE_CUSTOM) {
-            assert!(option::is_some(&custom_license_uri_bytes), EInvalidLicenseType);
+        // Validate prices with overflow protection
+        if (option::is_some(&one_time_price)) {
+            let price_val = *option::borrow(&one_time_price);
+            assert!(price_val > 0 && price_val <= MAX_U64, EInvalidInput);
         };
         
-        // If revenue redirection is enabled, require a recipient
-        if ((permission_flags & PERMISSION_REVENUE_REDIRECT) != 0) {
-            assert!(option::is_some(&revenue_recipient), EInvalidPermission);
+        if (option::is_some(&subscription_price)) {
+            let price_val = *option::borrow(&subscription_price);
+            assert!(price_val > 0 && price_val <= MAX_U64, EInvalidInput);
         };
         
-        // Convert URI bytes to URL object if provided
-        let custom_license_uri = if (option::is_some(&custom_license_uri_bytes)) {
-            let uri_bytes = option::extract(&mut custom_license_uri_bytes);
-            option::some(url::new_unsafe_from_bytes(uri_bytes))
-        } else {
-            option::none<Url>()
+        // Validate subscription duration with overflow protection
+        let sub_duration = if (subscription_duration_days == 0) { 30 } else { subscription_duration_days };
+        assert!(sub_duration <= MAX_SUBSCRIPTION_DAYS, EInvalidInput);
+        
+        // Check for potential overflow in millisecond conversion
+        let duration_ms = (sub_duration as u128) * (MILLISECONDS_PER_DAY as u128);
+        assert!(duration_ms <= (MAX_U64 as u128), EOverflow);
+        
+        // Validate time range
+        if (option::is_some(&timestamp_end)) {
+            let end_time = *option::borrow(&timestamp_end);
+            assert!(end_time >= timestamp_start, EInvalidTimeRange);
         };
         
-        let license = MyIP {
+        let current_time = clock::timestamp_ms(clock);
+        
+        let myip = MyIP {
             id: object::new(ctx),
-            name,
-            description,
-            creator: tx_context::sender(ctx),
-            creation_time: tx_context::epoch_timestamp_ms(ctx),
-            license_type,
-            permission_flags,
-            license_state: LICENSE_STATE_ACTIVE,
-            proof_of_creativity_id,
-            custom_license_uri,
-            revenue_recipient,
-            transferable,
-            expires_at,
+            owner: tx_context::sender(ctx),
+            media_type,
+            tags,
+            platform_id,
+            timestamp_start,
+            timestamp_end,
+            created_at: current_time,
+            last_updated: current_time,
+            encrypted_data,
+            encryption_id,
+            one_time_price,
+            subscription_price,
+            subscription_duration_days: sub_duration,
+            purchasers: table::new(ctx),
+            subscribers: table::new(ctx),
+            geographic_region,
+            data_quality,
+            sample_size,
+            collection_method,
+            is_updating,
+            update_frequency,
             version: upgrade::current_version(),
         };
+
+        let ip_id = object::uid_to_address(&myip.id);
         
-        let license_id = object::uid_to_address(&license.id);
-        
-        // Emit license created event
-        event::emit(LicenseCreatedEvent {
-            license_id,
-            creator: license.creator,
-            license_type: license.license_type,
-            permission_flags: license.permission_flags,
-            creation_time: license.creation_time,
+        event::emit(MyIPCreatedEvent {
+            ip_id,
+            owner: myip.owner,
+            media_type: myip.media_type,
+            platform_id: myip.platform_id,
+            one_time_price: myip.one_time_price,
+            subscription_price: myip.subscription_price,
+            created_at: myip.created_at,
         });
-        
-        license
+
+        myip
     }
-    
-    /// Create and register a new IP license transferring to creator
-    public entry fun create_license(
+
+    /// Create and share MyIP publicly
+    #[allow(lint(share_owned))]
+    public entry fun create_and_share(
         registry: &mut MyIPRegistry,
-        creator_profile: &Profile,
-        name: String,
-        description: String,
-        license_type: u8,
-        permission_flags: u64,
-        proof_of_creativity_id: Option<address>,
-        custom_license_uri_bytes: Option<vector<u8>>,
-        revenue_recipient: Option<address>,
-        transferable: bool,
-        expires_at: Option<u64>,
-        ctx: &mut TxContext
+        media_type: String,
+        tags: vector<String>,
+        platform_id: Option<address>,
+        timestamp_start: u64,
+        timestamp_end: Option<u64>,
+        encrypted_data: vector<u8>,
+        encryption_id: vector<u8>,
+        one_time_price: Option<u64>,
+        subscription_price: Option<u64>,
+        subscription_duration_days: u64,
+        geographic_region: Option<String>,
+        data_quality: Option<String>,
+        sample_size: Option<u64>,
+        collection_method: Option<String>,
+        is_updating: bool,
+        update_frequency: Option<String>,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ) {
-        // Verify caller owns the profile
-        assert!(tx_context::sender(ctx) == profile::owner(creator_profile), EUnauthorized);
-        
-        let license = create(
-            name,
-            description,
-            license_type,
-            permission_flags,
-            proof_of_creativity_id,
-            custom_license_uri_bytes,
-            revenue_recipient,
-            transferable,
-            expires_at,
-            ctx
+        let myip = create(
+            media_type,
+            tags,
+            platform_id,
+            timestamp_start,
+            timestamp_end,
+            encrypted_data,
+            encryption_id,
+            one_time_price,
+            subscription_price,
+            subscription_duration_days,
+            geographic_region,
+            data_quality,
+            sample_size,
+            collection_method,
+            is_updating,
+            update_frequency,
+            clock,
+            ctx,
         );
-        
-        // Create admin capability
-        let license_id = object::uid_to_address(&license.id);
-        let admin_cap = LicenseAdminCap {
-            id: object::new(ctx),
-            license_id,
-            admin: tx_context::sender(ctx),
-        };
-        
+
         // Register in the registry
-        register_license_internal(registry, &license);
-        
-        // Transfer license and capability to creator
-        transfer::transfer(license, tx_context::sender(ctx));
-        transfer::transfer(admin_cap, tx_context::sender(ctx));
+        let ip_id = object::uid_to_address(&myip.id);
+        table::add(&mut registry.ip_to_owner, ip_id, myip.owner);
+
+        transfer::share_object(myip);
     }
-    
-    /// Update license permissions
-    public entry fun update_license_permissions(
-        registry: &mut MyIPRegistry,
-        license: &mut MyIP,
-        admin_cap: &LicenseAdminCap,
-        new_permission_flags: u64,
-        ctx: &mut TxContext
+
+    /// Purchase one-time access to MyIP data
+    public entry fun purchase_one_time(
+        myip: &mut MyIP,
+        payment: Coin<MYS>,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ) {
-        // Verify admin capability
-        let license_id = object::uid_to_address(&license.id);
-        assert!(admin_cap.license_id == license_id, EUnauthorized);
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
+        let buyer = tx_context::sender(ctx);
         
-        // Verify license is active
-        assert!(license.license_state == LICENSE_STATE_ACTIVE, EInvalidLicenseState);
+        // Check if one-time purchase is available
+        assert!(option::is_some(&myip.one_time_price), ENotForSale);
+        let price = *option::borrow(&myip.one_time_price);
         
-        let old_flags = license.permission_flags;
-        license.permission_flags = new_permission_flags;
+        // Check payment amount
+        assert!(coin::value(&payment) >= price, EPriceMismatch);
         
-        // Update in registry if present
-        if (table::contains(&registry.permissions, license_id)) {
-            *table::borrow_mut(&mut registry.permissions, license_id) = new_permission_flags;
-            
-            // Update revenue recipient info if needed
-            if ((new_permission_flags & PERMISSION_REVENUE_REDIRECT) != 0) {
-                if (option::is_some(&license.revenue_recipient)) {
-                    let recipient = *option::borrow(&license.revenue_recipient);
-                    if (table::contains(&registry.revenue_recipients, license_id)) {
-                        *table::borrow_mut(&mut registry.revenue_recipients, license_id) = recipient;
-                    } else {
-                        table::add(&mut registry.revenue_recipients, license_id, recipient);
-                    }
-                }
+        // Check if buyer already has access
+        assert!(!table::contains(&myip.purchasers, buyer), EAlreadyPurchased);
+        
+        // Prevent self-purchase
+        assert!(buyer != myip.owner, ESelfPurchase);
+        
+        // Handle payment
+        transfer::public_transfer(payment, myip.owner);
+        
+        // Grant access
+        table::add(&mut myip.purchasers, buyer, true);
+
+        event::emit(PurchaseEvent {
+            ip_id: object::uid_to_address(&myip.id),
+            buyer,
+            price,
+            purchase_type: string::utf8(b"one_time"),
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    /// Purchase subscription access to MyIP data
+    public entry fun purchase_subscription(
+        myip: &mut MyIP,
+        payment: Coin<MYS>,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let buyer = tx_context::sender(ctx);
+        
+        // Check if subscription is available
+        assert!(option::is_some(&myip.subscription_price), ENotForSale);
+        let price = *option::borrow(&myip.subscription_price);
+        
+        // Check payment amount
+        assert!(coin::value(&payment) >= price, EPriceMismatch);
+        
+        // Prevent self-purchase
+        assert!(buyer != myip.owner, ESelfPurchase);
+        
+        // Validate subscription duration to prevent overflow
+        assert!(myip.subscription_duration_days > 0, EInvalidInput);
+        assert!(myip.subscription_duration_days <= MAX_SUBSCRIPTION_DAYS, EInvalidInput);
+        
+        // Calculate subscription expiry safely with overflow protection
+        let current_time = clock::timestamp_ms(clock);
+        let duration_ms = (myip.subscription_duration_days as u128) * (MILLISECONDS_PER_DAY as u128);
+        let expiry_time = (current_time as u128) + duration_ms;
+        
+        // Ensure we don't overflow u64
+        assert!(expiry_time <= (MAX_U64 as u128), EOverflow);
+        let expiry_time_u64 = expiry_time as u64;
+        
+        // Handle payment
+        transfer::public_transfer(payment, myip.owner);
+        
+        // Grant/extend subscription access
+        if (table::contains(&myip.subscribers, buyer)) {
+            // Extend existing subscription
+            let current_expiry = table::remove(&mut myip.subscribers, buyer);
+            let new_expiry = if (current_expiry > current_time) {
+                // Add to existing time, but check for overflow
+                let extended_time = (current_expiry as u128) + duration_ms;
+                assert!(extended_time <= (MAX_U64 as u128), EOverflow);
+                extended_time as u64
             } else {
-                // Remove revenue recipient if redirection is turned off
-                if (table::contains(&registry.revenue_recipients, license_id)) {
-                    table::remove(&mut registry.revenue_recipients, license_id);
-                }
-            }
+                expiry_time_u64
+            };
+            table::add(&mut myip.subscribers, buyer, new_expiry);
+        } else {
+            // New subscription
+            table::add(&mut myip.subscribers, buyer, expiry_time_u64);
         };
-        
-        // Emit license updated event
-        event::emit(LicenseUpdatedEvent {
-            license_id,
-            updater: tx_context::sender(ctx),
-            old_permission_flags: old_flags,
-            new_permission_flags: new_permission_flags,
-            update_time: tx_context::epoch_timestamp_ms(ctx),
+
+        event::emit(PurchaseEvent {
+            ip_id: object::uid_to_address(&myip.id),
+            buyer,
+            price,
+            purchase_type: string::utf8(b"subscription"),
+            timestamp: clock::timestamp_ms(clock),
         });
     }
-    
-    /// Update revenue recipient
-    public entry fun update_revenue_recipient(
-        registry: &mut MyIPRegistry,
-        license: &mut MyIP,
-        admin_cap: &LicenseAdminCap,
-        new_recipient: address,
-        ctx: &mut TxContext
+
+    /// Update pricing (owner only)
+    public entry fun update_pricing(
+        myip: &mut MyIP,
+        new_one_time_price: Option<u64>,
+        new_subscription_price: Option<u64>,
+        new_subscription_duration_days: Option<u64>,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ) {
-        // Verify admin capability
-        let license_id = object::uid_to_address(&license.id);
-        assert!(admin_cap.license_id == license_id, EUnauthorized);
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
+        assert!(tx_context::sender(ctx) == myip.owner, EUnauthorized);
         
-        // Verify license is active
-        assert!(license.license_state == LICENSE_STATE_ACTIVE, EInvalidLicenseState);
-        
-        // Update recipient
-        license.revenue_recipient = option::some(new_recipient);
-        
-        // Ensure revenue redirect flag is set
-        license.permission_flags = license.permission_flags | PERMISSION_REVENUE_REDIRECT;
-        
-        // Update in registry if present
-        if (table::contains(&registry.permissions, license_id)) {
-            *table::borrow_mut(&mut registry.permissions, license_id) = license.permission_flags;
-            
-            // Update revenue recipient
-            if (table::contains(&registry.revenue_recipients, license_id)) {
-                *table::borrow_mut(&mut registry.revenue_recipients, license_id) = new_recipient;
-            } else {
-                table::add(&mut registry.revenue_recipients, license_id, new_recipient);
-            }
+        // Validate new prices
+        if (option::is_some(&new_one_time_price)) {
+            let price_val = *option::borrow(&new_one_time_price);
+            assert!(price_val > 0, EInvalidInput);
         };
         
-        // Emit license updated event
-        event::emit(LicenseUpdatedEvent {
-            license_id,
-            updater: tx_context::sender(ctx),
-            old_permission_flags: license.permission_flags,
-            new_permission_flags: license.permission_flags,
-            update_time: tx_context::epoch_timestamp_ms(ctx),
+        if (option::is_some(&new_subscription_price)) {
+            let price_val = *option::borrow(&new_subscription_price);
+            assert!(price_val > 0, EInvalidInput);
+        };
+
+        myip.one_time_price = new_one_time_price;
+        myip.subscription_price = new_subscription_price;
+        
+        if (option::is_some(&new_subscription_duration_days)) {
+            let duration = *option::borrow(&new_subscription_duration_days);
+            if (duration > 0) {
+                myip.subscription_duration_days = duration;
+            };
+        };
+
+        event::emit(AccessGrantedEvent {
+            ip_id: object::uid_to_address(&myip.id),
+            user: myip.owner,
+            access_type: string::utf8(b"pricing_update"),
+            granted_by: tx_context::sender(ctx),
+            timestamp: clock::timestamp_ms(clock),
         });
     }
-    
-    /// Set license state (active, expired, revoked)
-    public entry fun set_license_state(
-        registry: &mut MyIPRegistry,
-        license: &mut MyIP,
-        admin_cap: &LicenseAdminCap,
-        new_state: u8,
-        ctx: &mut TxContext
+
+    /// Update MyIP content and metadata (owner only)
+    public entry fun update_content(
+        myip: &mut MyIP,
+        new_encrypted_data: Option<vector<u8>>,
+        new_tags: Option<vector<String>>,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ) {
-        // Verify admin capability
-        let license_id = object::uid_to_address(&license.id);
-        assert!(admin_cap.license_id == license_id, EUnauthorized);
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
+        assert!(tx_context::sender(ctx) == myip.owner, EUnauthorized);
         
-        // Validate state
-        assert!(
-            new_state == LICENSE_STATE_ACTIVE ||
-            new_state == LICENSE_STATE_EXPIRED ||
-            new_state == LICENSE_STATE_REVOKED,
-            EInvalidLicenseState
-        );
-        
-        let old_state = license.license_state;
-        license.license_state = new_state;
-        
-        // Update in registry if present
-        if (table::contains(&registry.states, license_id)) {
-            *table::borrow_mut(&mut registry.states, license_id) = new_state;
+        if (option::is_some(&new_encrypted_data)) {
+            myip.encrypted_data = *option::borrow(&new_encrypted_data);
         };
         
-        // Emit license state changed event
-        event::emit(LicenseStateChangedEvent {
-            license_id,
-            old_state,
-            new_state,
-            changer: tx_context::sender(ctx),
-            change_time: tx_context::epoch_timestamp_ms(ctx),
+        if (option::is_some(&new_tags)) {
+            myip.tags = *option::borrow(&new_tags);
+        };
+        
+        myip.last_updated = clock::timestamp_ms(clock);
+
+        event::emit(AccessGrantedEvent {
+            ip_id: object::uid_to_address(&myip.id),
+            user: myip.owner,
+            access_type: string::utf8(b"content_update"),
+            granted_by: tx_context::sender(ctx),
+            timestamp: clock::timestamp_ms(clock),
         });
     }
-    
-    /// Internal function to register a license in the registry
-    fun register_license_internal(registry: &mut MyIPRegistry, license: &MyIP) {
-        let license_id = object::uid_to_address(&license.id);
+
+    /// Check if user has access to MyIP data
+    public fun has_access(myip: &MyIP, user: address, clock: &Clock): bool {
+        // Owner always has access
+        if (user == myip.owner) return true;
         
-        // Store license info in registry tables
-        table::add(&mut registry.permissions, license_id, license.permission_flags);
-        table::add(&mut registry.license_types, license_id, license.license_type);
-        table::add(&mut registry.states, license_id, license.license_state);
-        table::add(&mut registry.creators, license_id, license.creator);
+        // Check one-time purchase
+        if (table::contains(&myip.purchasers, user)) return true;
         
-        // Add revenue recipient if set
-        if (option::is_some(&license.revenue_recipient)) {
-            let recipient = *option::borrow(&license.revenue_recipient);
-            table::add(&mut registry.revenue_recipients, license_id, recipient);
-        };
-        
-        // Add expiration time if set
-        if (option::is_some(&license.expires_at)) {
-            let expires = *option::borrow(&license.expires_at);
-            table::add(&mut registry.expirations, license_id, expires);
+        // Check active subscription
+        if (table::contains(&myip.subscribers, user)) {
+            let expiry = *table::borrow(&myip.subscribers, user);
+            let current_time = clock::timestamp_ms(clock);
+            return current_time <= expiry
         };
         
-        // Emit license registered event
-        event::emit(LicenseRegisteredEvent {
-            license_id,
-            registry_id: object::uid_to_address(&registry.id),
-            creator: license.creator,
-            permission_flags: license.permission_flags,
-        });
-    }
-    
-    /// Register an existing license in the registry (for admin use)
-    public entry fun register_license(
-        registry: &mut MyIPRegistry,
-        license: &MyIP,
-        ctx: &mut TxContext
-    ) {
-        // Only creator or admin can register
-        assert!(tx_context::sender(ctx) == license.creator, EUnauthorized);
-        
-        // Register the license
-        register_license_internal(registry, license);
-    }
-    
-    /// Update a license in the registry (for keeping registry synchronized)
-    public entry fun update_license_in_registry(
-        registry: &mut MyIPRegistry,
-        license: &MyIP,
-        ctx: &mut TxContext
-    ) {
-        // Only creator can update
-        assert!(tx_context::sender(ctx) == license.creator, EUnauthorized);
-        
-        let license_id = object::uid_to_address(&license.id);
-        
-        // Verify license is in registry
-        assert!(table::contains(&registry.permissions, license_id), ELicenseNotRegistered);
-        
-        // Update registry information
-        *table::borrow_mut(&mut registry.permissions, license_id) = license.permission_flags;
-        *table::borrow_mut(&mut registry.license_types, license_id) = license.license_type;
-        *table::borrow_mut(&mut registry.states, license_id) = license.license_state;
-        
-        // Update revenue recipient if needed
-        if (option::is_some(&license.revenue_recipient)) {
-            let recipient = *option::borrow(&license.revenue_recipient);
-            if (table::contains(&registry.revenue_recipients, license_id)) {
-                *table::borrow_mut(&mut registry.revenue_recipients, license_id) = recipient;
-            } else {
-                table::add(&mut registry.revenue_recipients, license_id, recipient);
-            }
-        } else if (table::contains(&registry.revenue_recipients, license_id)) {
-            table::remove(&mut registry.revenue_recipients, license_id);
-        };
-        
-        // Update expiration if needed
-        if (option::is_some(&license.expires_at)) {
-            let expires = *option::borrow(&license.expires_at);
-            if (table::contains(&registry.expirations, license_id)) {
-                *table::borrow_mut(&mut registry.expirations, license_id) = expires;
-            } else {
-                table::add(&mut registry.expirations, license_id, expires);
-            }
-        } else if (table::contains(&registry.expirations, license_id)) {
-            table::remove(&mut registry.expirations, license_id);
-        };
-    }
-    
-    /// Transfer license to a new owner
-    #[allow(lint(custom_state_change))]
-    public entry fun transfer_license(
-        license: MyIP,
-        admin_cap: &LicenseAdminCap,
-        recipient: address,
-        ctx: &mut TxContext
-    ) {
-        // Verify admin capability and transferability
-        let license_id = object::uid_to_address(&license.id);
-        assert!(admin_cap.license_id == license_id, EUnauthorized);
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
-        assert!(license.transferable, ELicenseNonTransferable);
-        
-        // Verify license is active
-        assert!(license.license_state == LICENSE_STATE_ACTIVE, EInvalidLicenseState);
-        
-        let sender = tx_context::sender(ctx);
-        
-        // Emit license transferred event
-        event::emit(LicenseTransferredEvent {
-            license_id,
-            from: sender,
-            to: recipient,
-            transfer_time: tx_context::epoch_timestamp_ms(ctx),
-        });
-        
-        // Transfer license to recipient
-        transfer::transfer(license, recipient);
-    }
-    
-    /// Transfer admin capability to a new admin
-    #[allow(lint(custom_state_change))]
-    public entry fun transfer_admin_cap(
-        admin_cap: LicenseAdminCap,
-        recipient: address,
-        ctx: &mut TxContext
-    ) {
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
-        transfer::transfer(admin_cap, recipient);
-    }
-    
-    /// Set proof of creativity ID
-    public entry fun set_poc_id(
-        license: &mut MyIP,
-        admin_cap: &LicenseAdminCap,
-        poc_id: address,
-        ctx: &mut TxContext
-    ) {
-        // Verify admin capability
-        let license_id = object::uid_to_address(&license.id);
-        assert!(admin_cap.license_id == license_id, EUnauthorized);
-        assert!(admin_cap.admin == tx_context::sender(ctx), EUnauthorized);
-        
-        license.proof_of_creativity_id = option::some(poc_id);
-    }
-    
-    // === Registry Permission Check Functions ===
-    
-    /// Check if a license is registered in the registry
-    public fun is_registered(registry: &MyIPRegistry, license_id: address): bool {
-        table::contains(&registry.permissions, license_id)
-    }
-    
-    /// Check if a specific permission is granted for a license
-    public fun registry_has_permission(registry: &MyIPRegistry, license_id: address, permission: u64, ctx: &TxContext): bool {
-        if (!table::contains(&registry.permissions, license_id)) return false;
-        if (!table::contains(&registry.states, license_id)) return false;
-        
-        // Check license state first
-        let state = *table::borrow(&registry.states, license_id);
-        if (state != LICENSE_STATE_ACTIVE) return false;
-        
-        // Check for expiration
-        if (table::contains(&registry.expirations, license_id)) {
-            let expires_at = *table::borrow(&registry.expirations, license_id);
-            let current = tx_context::epoch_timestamp_ms(ctx);
-            if (current >= expires_at) return false;
-        };
-        
-        // Check specific permission
-        let permissions = *table::borrow(&registry.permissions, license_id);
-        (permissions & permission) != 0
-    }
-    
-    /// Check if commenting is allowed (registry version)
-    public fun registry_is_commenting_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_ALLOW_COMMENTS, ctx)
-    }
-    
-    /// Check if reactions/likes are allowed (registry version)
-    public fun registry_is_reactions_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_ALLOW_REACTIONS, ctx)
-    }
-    
-    /// Check if reposting is allowed (registry version)
-    public fun registry_is_reposting_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_ALLOW_REPOSTS, ctx)
-    }
-    
-    /// Check if quote posting is allowed (registry version)
-    public fun registry_is_quoting_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_ALLOW_QUOTES, ctx)
-    }
-    
-    /// Check if tipping is allowed (registry version)
-    public fun registry_is_tipping_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_ALLOW_TIPS, ctx)
-    }
-    
-    /// Check if commercial use is allowed (registry version)
-    public fun registry_is_commercial_use_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_COMMERCIAL_USE, ctx)
-    }
-    
-    /// Check if derivatives are allowed (registry version)
-    public fun registry_is_derivatives_allowed(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_DERIVATIVES_ALLOWED, ctx)
-    }
-    
-    /// Check if it's a public license (registry version)
-    public fun registry_is_public_license(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_PUBLIC_LICENSE, ctx)
-    }
-    
-    /// Check if revenue is redirected (registry version)
-    public fun registry_is_revenue_redirected(registry: &MyIPRegistry, license_id: address, ctx: &TxContext): bool {
-        registry_has_permission(registry, license_id, PERMISSION_REVENUE_REDIRECT, ctx)
-    }
-    
-    /// Get revenue recipient from registry
-    public fun registry_get_revenue_recipient(registry: &MyIPRegistry, license_id: address): address {
-        assert!(table::contains(&registry.revenue_recipients, license_id), ELicenseNotRegistered);
-        *table::borrow(&registry.revenue_recipients, license_id)
-    }
-    
-    /// Get creator from registry
-    public fun registry_get_creator(registry: &MyIPRegistry, license_id: address): address {
-        assert!(table::contains(&registry.creators, license_id), ELicenseNotRegistered);
-        *table::borrow(&registry.creators, license_id)
-    }
-    
-    // === Social Interaction Permission Checks for Posts ===
-    
-    /// Check if commenting is allowed
-    public fun is_commenting_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_ALLOW_COMMENTS) != 0
-    }
-    
-    /// Check if reactions/likes are allowed
-    public fun is_reactions_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_ALLOW_REACTIONS) != 0
-    }
-    
-    /// Check if reposting is allowed
-    public fun is_reposting_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_ALLOW_REPOSTS) != 0
-    }
-    
-    /// Check if quote posting is allowed
-    public fun is_quoting_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_ALLOW_QUOTES) != 0
-    }
-    
-    /// Check if tipping is allowed
-    public fun is_tipping_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_ALLOW_TIPS) != 0
-    }
-    
-    // === Validation Functions ===
-    
-    /// Check if commercial use is allowed
-    public fun is_commercial_use_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_COMMERCIAL_USE) != 0
-    }
-    
-    /// Check if derivatives are allowed
-    public fun is_derivatives_allowed(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_DERIVATIVES_ALLOWED) != 0
-    }
-    
-    /// Check if it's a public license
-    public fun is_public_license(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_PUBLIC_LICENSE) != 0
-    }
-    
-    /// Check if authority is required
-    public fun is_authority_required(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_AUTHORITY_REQUIRED) != 0
-    }
-    
-    /// Check if share-alike is required
-    public fun is_share_alike_required(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_SHARE_ALIKE) != 0
-    }
-    
-    /// Check if attribution is required
-    public fun is_attribution_required(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_REQUIRE_ATTRIBUTION) != 0
-    }
-    
-    /// Check if revenue is redirected
-    public fun is_revenue_redirected(license: &MyIP): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & PERMISSION_REVENUE_REDIRECT) != 0
-    }
-    
-    /// Check if a specific permission is granted
-    public fun has_permission(license: &MyIP, permission: u64): bool {
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
-        };
-        (license.permission_flags & permission) != 0
-    }
-    
-    /// Check if license has expired
-    public fun is_expired(license: &MyIP, current_epoch: u64): bool {
-        if (option::is_some(&license.expires_at)) {
-            let expires_at = option::borrow(&license.expires_at);
-            return current_epoch >= *expires_at
-        };
         false
     }
-    
-    /// Validate license for a specific operation
-    public fun validate_license_for_operation(
-        license: &MyIP,
-        required_permission: u64,
-        current_epoch: u64
-    ): bool {
-        // Check license state
-        if (license.license_state != LICENSE_STATE_ACTIVE) {
-            return false
+
+    /// Decrypt MyIP data for authorized users
+    public fun decrypt_data(
+        myip: &MyIP,
+        viewer: address,
+        clock: &Clock,
+        keys: &vector<VerifiedDerivedKey>,
+        pks: &vector<PublicKey>,
+    ): Option<vector<u8>> {
+        // Only allow access if user has direct access to this MyIP
+        if (has_access(myip, viewer, clock)) {
+            let obj = bf_hmac_encryption::parse_encrypted_object(myip.encrypted_data);
+            return bf_hmac_encryption::decrypt(&obj, keys, pks)
         };
         
-        // Check expiration
-        if (is_expired(license, current_epoch)) {
-            return false
-        };
-        
-        // Check permission
-        has_permission(license, required_permission)
+        option::none()
     }
-    
+
+    /// Grant free access (owner only) - useful for samples or promotions
+    public entry fun grant_access(
+        myip: &mut MyIP,
+        user: address,
+        access_type: u8, // 0 = one-time, 1 = subscription
+        subscription_days: Option<u64>,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) == myip.owner, EUnauthorized);
+        assert!(user != myip.owner, ESelfPurchase); // Owner doesn't need granted access
+        
+        if (access_type == 0) {
+            // Grant one-time access
+            if (!table::contains(&myip.purchasers, user)) {
+                table::add(&mut myip.purchasers, user, true);
+            };
+        } else {
+            // Grant subscription access
+            let duration_days = if (option::is_some(&subscription_days)) {
+                let days = *option::borrow(&subscription_days);
+                assert!(days > 0 && days <= MAX_SUBSCRIPTION_DAYS, EInvalidInput);
+                days
+            } else {
+                myip.subscription_duration_days
+            };
+            
+            let current_time = clock::timestamp_ms(clock);
+            let duration_ms = (duration_days as u128) * (MILLISECONDS_PER_DAY as u128);
+            let expiry_time = (current_time as u128) + duration_ms;
+            
+            // Ensure we don't overflow u64
+            assert!(expiry_time <= (MAX_U64 as u128), EOverflow);
+            let expiry_time_u64 = expiry_time as u64;
+            
+            if (table::contains(&myip.subscribers, user)) {
+                table::remove(&mut myip.subscribers, user);
+            };
+            table::add(&mut myip.subscribers, user, expiry_time_u64);
+        };
+
+        event::emit(AccessGrantedEvent {
+            ip_id: object::uid_to_address(&myip.id),
+            user,
+            access_type: if (access_type == 0) { string::utf8(b"one_time") } else { string::utf8(b"subscription") },
+            granted_by: tx_context::sender(ctx),
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
     // === Getter Functions ===
     
-    /// Get creator of the IP
-    public fun creator(ip: &MyIP): address {
-        ip.creator
+    public fun owner(myip: &MyIP): address { myip.owner }
+    public fun media_type(myip: &MyIP): String { myip.media_type }
+    public fun tags(myip: &MyIP): vector<String> { myip.tags }
+    public fun platform_id(myip: &MyIP): Option<address> { myip.platform_id }
+    public fun one_time_price(myip: &MyIP): Option<u64> { myip.one_time_price }
+    public fun subscription_price(myip: &MyIP): Option<u64> { myip.subscription_price }
+    public fun subscription_duration_days(myip: &MyIP): u64 { myip.subscription_duration_days }
+    public fun created_at(myip: &MyIP): u64 { myip.created_at }
+    public fun last_updated(myip: &MyIP): u64 { myip.last_updated }
+    public fun timestamp_start(myip: &MyIP): u64 { myip.timestamp_start }
+    public fun timestamp_end(myip: &MyIP): Option<u64> { myip.timestamp_end }
+    public fun geographic_region(myip: &MyIP): Option<String> { myip.geographic_region }
+    public fun data_quality(myip: &MyIP): Option<String> { myip.data_quality }
+    public fun sample_size(myip: &MyIP): Option<u64> { myip.sample_size }
+    public fun collection_method(myip: &MyIP): Option<String> { myip.collection_method }
+    public fun is_updating(myip: &MyIP): bool { myip.is_updating }
+    public fun update_frequency(myip: &MyIP): Option<String> { myip.update_frequency }
+    public fun purchaser_count(myip: &MyIP): u64 { table::length(&myip.purchasers) }
+    public fun subscriber_count(myip: &MyIP): u64 { table::length(&myip.subscribers) }
+    public fun is_one_time_for_sale(myip: &MyIP): bool { option::is_some(&myip.one_time_price) }
+    public fun is_subscription_available(myip: &MyIP): bool { option::is_some(&myip.subscription_price) }
+
+    /// Check if a user has an active subscription
+    public fun has_active_subscription(myip: &MyIP, user: address, clock: &Clock): bool {
+        if (!table::contains(&myip.subscribers, user)) return false;
+        let expiry = *table::borrow(&myip.subscribers, user);
+        let current_time = clock::timestamp_ms(clock);
+        current_time <= expiry
     }
-    
-    /// Get name of the IP
-    public fun name(ip: &MyIP): String {
-        ip.name
+
+    /// Get subscription expiry time for a user
+    public fun get_subscription_expiry(myip: &MyIP, user: address): Option<u64> {
+        if (table::contains(&myip.subscribers, user)) {
+            option::some(*table::borrow(&myip.subscribers, user))
+        } else {
+            option::none()
+        }
     }
-    
-    /// Get description of the IP
-    public fun description(ip: &MyIP): String {
-        ip.description
+
+    /// Get total revenue potential (for analytics) with overflow protection
+    public fun get_revenue_potential(myip: &MyIP): u64 {
+        let one_time_revenue = if (option::is_some(&myip.one_time_price)) {
+            let price = *option::borrow(&myip.one_time_price);
+            let count = table::length(&myip.purchasers);
+            // Use u128 for calculation to detect overflow
+            let revenue = (price as u128) * (count as u128);
+            if (revenue > (MAX_U64 as u128)) {
+                MAX_U64
+            } else {
+                revenue as u64
+            }
+        } else {
+            0
+        };
+        
+        let subscription_revenue = if (option::is_some(&myip.subscription_price)) {
+            let price = *option::borrow(&myip.subscription_price);
+            let count = table::length(&myip.subscribers);
+            // Use u128 for calculation to detect overflow
+            let revenue = (price as u128) * (count as u128);
+            if (revenue > (MAX_U64 as u128)) {
+                MAX_U64
+            } else {
+                revenue as u64
+            }
+        } else {
+            0
+        };
+        
+        // Safe addition with overflow protection
+        let total_revenue = (one_time_revenue as u128) + (subscription_revenue as u128);
+        if (total_revenue > (MAX_U64 as u128)) {
+            MAX_U64
+        } else {
+            total_revenue as u64
+        }
     }
-    
-    /// Get creation time of the IP
-    public fun creation_time(ip: &MyIP): u64 {
-        ip.creation_time
+
+    /// Check if MyIP has any sales (one-time or subscription)
+    public fun has_any_sales(myip: &MyIP): bool {
+        table::length(&myip.purchasers) > 0 || table::length(&myip.subscribers) > 0
     }
+
+    // === Registry Functions ===
     
-    /// Get license type
-    public fun license_type(ip: &MyIP): u8 {
-        ip.license_type
+    /// Get owner of a MyIP by ID
+    public fun registry_get_owner(registry: &MyIPRegistry, ip_id: address): Option<address> {
+        if (table::contains(&registry.ip_to_owner, ip_id)) {
+            option::some(*table::borrow(&registry.ip_to_owner, ip_id))
+        } else {
+            option::none()
+        }
     }
-    
-    /// Get permission flags
-    public fun permission_flags(ip: &MyIP): u64 {
-        ip.permission_flags
+
+    /// Check if a MyIP is registered
+    public fun is_registered(registry: &MyIPRegistry, ip_id: address): bool {
+        table::contains(&registry.ip_to_owner, ip_id)
     }
-    
-    /// Get license state
-    public fun license_state(ip: &MyIP): u8 {
-        ip.license_state
+
+    /// Register a MyIP in the registry
+    public entry fun register_in_registry(
+        registry: &mut MyIPRegistry,
+        myip: &MyIP,
+        ctx: &mut TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) == myip.owner, EUnauthorized);
+        let ip_id = object::uid_to_address(&myip.id);
+        
+        if (!table::contains(&registry.ip_to_owner, ip_id)) {
+            table::add(&mut registry.ip_to_owner, ip_id, myip.owner);
+        };
     }
-    
-    /// Get proof of creativity ID
-    public fun proof_of_creativity_id(ip: &MyIP): &Option<address> {
-        &ip.proof_of_creativity_id
+
+    /// Remove a MyIP from the registry
+    public entry fun unregister_from_registry(
+        registry: &mut MyIPRegistry,
+        ip_id: address,
+        ctx: &mut TxContext,
+    ) {
+        if (table::contains(&registry.ip_to_owner, ip_id)) {
+            let owner = *table::borrow(&registry.ip_to_owner, ip_id);
+            assert!(tx_context::sender(ctx) == owner, EUnauthorized);
+            table::remove(&mut registry.ip_to_owner, ip_id);
+        };
     }
+
+    // === Versioning Functions ===
     
-    /// Get custom license URI
-    public fun custom_license_uri(ip: &MyIP): &Option<Url> {
-        &ip.custom_license_uri
+    public fun version(myip: &MyIP): u64 {
+        myip.version
     }
-    
-    /// Get revenue recipient
-    public fun revenue_recipient(ip: &MyIP): &Option<address> {
-        &ip.revenue_recipient
+
+    public fun borrow_version_mut(myip: &mut MyIP): &mut u64 {
+        &mut myip.version
     }
-    
-    /// Is license transferable
-    public fun is_transferable(ip: &MyIP): bool {
-        ip.transferable
-    }
-    
-    /// Get expiration time
-    public fun expires_at(ip: &MyIP): &Option<u64> {
-        &ip.expires_at
-    }
-    
-    /// Get the ID of the MyIP
-    public fun id(ip: &MyIP): &UID {
-        &ip.id
-    }
-    
-    /// Get the address of the MyIP
-    public fun id_address(ip: &MyIP): address {
-        object::uid_to_address(&ip.id)
-    }
-    
-    // === License Template Helpers ===
-    
-    /// Create a Creative Commons Zero license (CC0 - public domain)
-    public fun cc0_license_flags(): u64 {
-        PERMISSION_COMMERCIAL_USE | 
-        PERMISSION_DERIVATIVES_ALLOWED | 
-        PERMISSION_PUBLIC_LICENSE |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-    }
-    
-    /// Create a Creative Commons BY license (Attribution)
-    public fun cc_by_license_flags(): u64 {
-        PERMISSION_COMMERCIAL_USE | 
-        PERMISSION_DERIVATIVES_ALLOWED | 
-        PERMISSION_PUBLIC_LICENSE | 
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-    }
-    
-    /// Create a Creative Commons BY-SA license (Attribution-ShareAlike)
-    public fun cc_by_sa_license_flags(): u64 {
-        PERMISSION_COMMERCIAL_USE | 
-        PERMISSION_DERIVATIVES_ALLOWED | 
-        PERMISSION_PUBLIC_LICENSE | 
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_SHARE_ALIKE |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-    }
-    
-    /// Create a Creative Commons BY-NC license (Attribution-NonCommercial)
-    public fun cc_by_nc_license_flags(): u64 {
-        PERMISSION_DERIVATIVES_ALLOWED | 
-        PERMISSION_PUBLIC_LICENSE | 
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-        // Note: No COMMERCIAL_USE flag
-    }
-    
-    /// Create a Creative Commons BY-NC-SA license (Attribution-NonCommercial-ShareAlike)
-    public fun cc_by_nc_sa_license_flags(): u64 {
-        PERMISSION_DERIVATIVES_ALLOWED | 
-        PERMISSION_PUBLIC_LICENSE | 
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_SHARE_ALIKE |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-        // Note: No COMMERCIAL_USE flag
-    }
-    
-    /// Create a Creative Commons BY-ND license (Attribution-NoDerivatives)
-    public fun cc_by_nd_license_flags(): u64 {
-        PERMISSION_COMMERCIAL_USE | 
-        PERMISSION_PUBLIC_LICENSE | 
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_TIPS
-        // Note: No DERIVATIVES_ALLOWED, ALLOW_REPOSTS, ALLOW_QUOTES flags
-    }
-    
-    /// Create a personal use only license
-    public fun personal_use_license_flags(): u64 {
-        PERMISSION_PUBLIC_LICENSE |
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS
-        // Note: No COMMERCIAL_USE, DERIVATIVES_ALLOWED, ALLOW_REPOSTS, ALLOW_QUOTES, ALLOW_TIPS flags
-    }
-    
-    /// Create a token bound license
-    public fun token_bound_license_flags(): u64 {
-        PERMISSION_COMMERCIAL_USE |
-        PERMISSION_AUTHORITY_REQUIRED |
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_COMMENTS |
-        PERMISSION_ALLOW_REACTIONS |
-        PERMISSION_ALLOW_REPOSTS |
-        PERMISSION_ALLOW_QUOTES |
-        PERMISSION_ALLOW_TIPS
-    }
-    
-    /// Create a private license (view only)
-    public fun private_license_flags(): u64 {
-        PERMISSION_REQUIRE_ATTRIBUTION |
-        PERMISSION_ALLOW_REACTIONS
-        // No other permissions allowed
-    }
-    
-    /// Add revenue redirection to a license
-    public fun add_revenue_redirection(base_flags: u64): u64 {
-        base_flags | PERMISSION_REVENUE_REDIRECT
-    }
-    
-    /// === Versioning Functions ===
-    
-    /// Get the version of a MyIP
-    public fun version(ip: &MyIP): u64 {
-        ip.version
-    }
-    
-    /// Get a mutable reference to the MyIP version (for upgrade module)
-    public fun borrow_version_mut(ip: &mut MyIP): &mut u64 {
-        &mut ip.version
-    }
-    
-    /// Get the version of the registry
+
     public fun registry_version(registry: &MyIPRegistry): u64 {
         registry.version
     }
-    
-    /// Get a mutable reference to the registry version
+
     public fun borrow_registry_version_mut(registry: &mut MyIPRegistry): &mut u64 {
         &mut registry.version
     }
-    
+
     /// Migration function for MyIP
     public entry fun migrate_my_ip(
-        my_ip: &mut MyIP,
+        myip: &mut MyIP,
         _: &UpgradeAdminCap,
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
+        assert!(myip.version < current_version, EInvalidInput);
         
-        // Verify this is an upgrade (new version > current version)
-        assert!(my_ip.version < current_version, EWrongVersion);
+        let old_version = myip.version;
+        myip.version = current_version;
         
-        // Remember old version and update to new version
-        let old_version = my_ip.version;
-        my_ip.version = current_version;
-        
-        // Emit event for object migration
-        let my_ip_id = object::id(my_ip);
+        let myip_id = object::id(myip);
         upgrade::emit_migration_event(
-            my_ip_id,
+            myip_id,
             string::utf8(b"MyIP"),
             old_version,
             tx_context::sender(ctx)
         );
-        
-        // Any migration logic can be added here for future upgrades
     }
-    
+
     /// Migration function for MyIPRegistry
     public entry fun migrate_registry(
         registry: &mut MyIPRegistry,
@@ -1031,15 +706,11 @@ module social_contracts::my_ip {
         ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
+        assert!(registry.version < current_version, EInvalidInput);
         
-        // Verify this is an upgrade (new version > current version)
-        assert!(registry.version < current_version, EWrongVersion);
-        
-        // Remember old version and update to new version
         let old_version = registry.version;
         registry.version = current_version;
         
-        // Emit event for object migration
         let registry_id = object::id(registry);
         upgrade::emit_migration_event(
             registry_id,
@@ -1047,76 +718,32 @@ module social_contracts::my_ip {
             old_version,
             tx_context::sender(ctx)
         );
-        
-        // Any migration logic can be added here for future upgrades
     }
 
-    // === Test Only Functions ===
+    // === Test Functions ===
 
     #[test_only]
-    /// Initialize registry for testing
     public fun test_init(ctx: &mut TxContext) {
-        // Create and share the registry
         let registry = MyIPRegistry {
             id: object::new(ctx),
-            permissions: table::new(ctx),
-            license_types: table::new(ctx),
-            revenue_recipients: table::new(ctx),
-            states: table::new(ctx),
-            creators: table::new(ctx),
-            expirations: table::new(ctx),
-            version: 0, // Use 0 for testing
+            ip_to_owner: table::new(ctx),
+            version: upgrade::current_version(),
         };
-        
-        // Share the registry
         transfer::share_object(registry);
     }
 
     #[test_only]
-    /// Test helper to destroy a MyIP instance
-    public fun test_destroy(ip: MyIP) {
+    public fun test_destroy(myip: MyIP) {
         let MyIP { 
-            id, name: _, description: _, creator: _, creation_time: _, 
-            license_type: _, permission_flags: _, license_state: _,
-            proof_of_creativity_id: _, custom_license_uri: _, revenue_recipient: _,
-            transferable: _, expires_at: _, version: _ 
-        } = ip;
+            id, owner: _, media_type: _, tags: _, platform_id: _,
+            timestamp_start: _, timestamp_end: _, created_at: _, last_updated: _,
+            encrypted_data: _, encryption_id: _, one_time_price: _, subscription_price: _,
+            subscription_duration_days: _, purchasers, subscribers, geographic_region: _,
+            data_quality: _, sample_size: _, collection_method: _, is_updating: _,
+            update_frequency: _, version: _
+        } = myip;
+        table::drop(purchasers);
+        table::drop(subscribers);
         object::delete(id);
-    }
-
-    #[test_only]
-    /// Helper functions for testing permission flags without direct access to constants
-    public fun is_commercial_use_allowed_for_flags(flags: u64): bool {
-        (flags & PERMISSION_COMMERCIAL_USE) != 0
-    }
-
-    #[test_only]
-    public fun is_derivatives_allowed_for_flags(flags: u64): bool {
-        (flags & PERMISSION_DERIVATIVES_ALLOWED) != 0
-    }
-
-    #[test_only]
-    public fun is_public_license_for_flags(flags: u64): bool {
-        (flags & PERMISSION_PUBLIC_LICENSE) != 0
-    }
-
-    #[test_only]
-    public fun is_authority_required_for_flags(flags: u64): bool {
-        (flags & PERMISSION_AUTHORITY_REQUIRED) != 0
-    }
-
-    #[test_only]
-    public fun is_share_alike_required_for_flags(flags: u64): bool {
-        (flags & PERMISSION_SHARE_ALIKE) != 0
-    }
-
-    #[test_only]
-    public fun is_attribution_required_for_flags(flags: u64): bool {
-        (flags & PERMISSION_REQUIRE_ATTRIBUTION) != 0
-    }
-
-    #[test_only]
-    public fun is_revenue_redirected_for_flags(flags: u64): bool {
-        (flags & PERMISSION_REVENUE_REDIRECT) != 0
     }
 }

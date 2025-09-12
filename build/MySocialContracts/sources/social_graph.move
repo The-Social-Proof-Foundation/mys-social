@@ -1,15 +1,21 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Social graph module for the MySocial network
 /// Manages social relationships between users (following/followers)
 
+#[allow(duplicate_alias, unused_use)]
 module social_contracts::social_graph {
-    use std::string;
+    use std::{string, option, vector};
     
-    use mys::event;
-    use mys::table::{Self, Table};
-    use mys::vec_set::{Self, VecSet};
+    use mys::{
+        object::{Self, UID, ID},
+        tx_context::{Self, TxContext},
+        transfer,
+        event,
+        table::{Self, Table},
+        vec_set::{Self, VecSet}
+    };
     
     use social_contracts::profile;
     use social_contracts::upgrade;
@@ -44,8 +50,8 @@ module social_contracts::social_graph {
         unfollowed: address,
     }
 
-    /// Module initializer to create the social graph
-    fun init(ctx: &mut TxContext) {
+    /// Bootstrap initialization function - creates the social graph shared object
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
         let social_graph = SocialGraph {
             id: object::new(ctx),
             following: table::new(ctx),
@@ -56,11 +62,11 @@ module social_contracts::social_graph {
         // Share the social graph to make it globally accessible
         transfer::share_object(social_graph);
     }
-    
+
     #[test_only]
     /// Initialize the social graph for testing
     public fun init_for_testing(ctx: &mut TxContext) {
-        init(ctx)
+        bootstrap_init(ctx)
     }
 
     /// Follow a profile by address

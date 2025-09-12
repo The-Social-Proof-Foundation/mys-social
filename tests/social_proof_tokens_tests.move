@@ -1,4 +1,4 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
@@ -17,7 +17,7 @@ module social_contracts::token_exchange_tests {
     use mys::mys::MYS;
     use mys::clock::{Self, Clock};
     
-    use social_contracts::token_exchange::{Self, ExchangeConfig, TokenRegistry, SocialToken};
+    use social_contracts::social_proof_tokens::{Self, SocialProofTokensConfig, TokenRegistry, SocialToken, TokenPool};
     use social_contracts::profile::{Self, Profile, UsernameRegistry};
     use social_contracts::post::{Self, Post};
     use social_contracts::block_list::{Self, BlockListRegistry};
@@ -36,7 +36,7 @@ module social_contracts::token_exchange_tests {
     const MYS_DECIMALS: u64 = 9;
     const MYS_SCALING: u64 = 1000000000; // 10^9
     
-    // Token types from token_exchange module
+    // Token types from social_proof_tokens module
     const TOKEN_TYPE_PROFILE: u8 = 1;
     const TOKEN_TYPE_POST: u8 = 2;
     
@@ -48,22 +48,22 @@ module social_contracts::token_exchange_tests {
         
         // Initialize the token exchange system
         {
-            token_exchange::init_for_testing(test_scenario::ctx(&mut scenario));
+            social_proof_tokens::init_for_testing(test_scenario::ctx(&mut scenario));
         };
         
         // Verify admin cap and registry were created
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             // Check that admin cap was transferred to sender
-            let admin_cap = test_scenario::take_from_sender<token_exchange::ExchangeAdminCap>(&scenario);
+            let admin_cap = test_scenario::take_from_sender<social_proof_tokens::SocialProofTokensAdminCap>(&scenario);
             test_scenario::return_to_sender(&scenario, admin_cap);
             
             // Check that registry was shared
-            let registry = test_scenario::take_shared<token_exchange::TokenRegistry>(&scenario);
+            let registry = test_scenario::take_shared<social_proof_tokens::TokenRegistry>(&scenario);
             test_scenario::return_shared(registry);
             
             // Check that config was shared
-            let config = test_scenario::take_shared<token_exchange::ExchangeConfig>(&scenario);
+            let config = test_scenario::take_shared<social_proof_tokens::SocialProofTokensConfig>(&scenario);
             test_scenario::return_shared(config);
         };
         
@@ -76,18 +76,18 @@ module social_contracts::token_exchange_tests {
         
         // Initialize the token exchange system
         {
-            token_exchange::init_for_testing(test_scenario::ctx(&mut scenario));
+            social_proof_tokens::init_for_testing(test_scenario::ctx(&mut scenario));
         };
         
         // Update the config and verify changes
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let admin_cap = test_scenario::take_from_sender<token_exchange::ExchangeAdminCap>(&scenario);
-            let mut config = test_scenario::take_shared<token_exchange::ExchangeConfig>(&scenario);
+            let admin_cap = test_scenario::take_from_sender<social_proof_tokens::SocialProofTokensAdminCap>(&scenario);
+            let mut config = test_scenario::take_shared<social_proof_tokens::SocialProofTokensConfig>(&scenario);
             
             let ecosystem_treasury = @0x67890;
             
-            token_exchange::update_exchange_config(
+            social_proof_tokens::update_social_proof_tokens_config(
                 &admin_cap,
                 &mut config,
                 200, // total_fee_bps (2%)
@@ -98,18 +98,9 @@ module social_contracts::token_exchange_tests {
                 200_000,     // quadratic_coefficient (doubled)
                 ecosystem_treasury,
                 1000, // max_hold_percent_bps (10%)
-                10, // post_likes_weight
-                5,  // post_comments_weight
-                15, // post_tips_weight
-                100, // post_viral_threshold
-                10, // profile_follows_weight
-                5,  // profile_posts_weight
-                15, // profile_tips_weight
-                100, // profile_viral_threshold
-                3600, // min_post_auction_duration (1 hour)
-                86400, // max_post_auction_duration (24 hours)
-                86400, // min_profile_auction_duration (1 day)
-                604800, // max_profile_auction_duration (7 days)
+                2000_000_000, // post_threshold (2000 MYS)
+                20000_000_000, // profile_threshold (20000 MYS) 
+                2000, // max_individual_stake_bps (20%)
                 test_scenario::ctx(&mut scenario)
             );
             
@@ -125,9 +116,9 @@ module social_contracts::token_exchange_tests {
     fun setup_test_scenario(): Scenario {
         let mut scenario = test_scenario::begin(ADMIN);
         
-        // Initialize token_exchange module first
+        // Initialize social_proof_tokens module first
         {
-            token_exchange::init_for_testing(test_scenario::ctx(&mut scenario));
+            social_proof_tokens::init_for_testing(test_scenario::ctx(&mut scenario));
         };
         
         test_scenario::next_tx(&mut scenario, ADMIN);
@@ -204,10 +195,10 @@ module social_contracts::token_exchange_tests {
         // Update exchange config
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let admin_cap = test_scenario::take_from_sender<token_exchange::ExchangeAdminCap>(&scenario);
-            let mut config = test_scenario::take_shared<token_exchange::ExchangeConfig>(&scenario);
+            let admin_cap = test_scenario::take_from_sender<social_proof_tokens::SocialProofTokensAdminCap>(&scenario);
+            let mut config = test_scenario::take_shared<social_proof_tokens::SocialProofTokensConfig>(&scenario);
             
-            token_exchange::update_exchange_config(
+            social_proof_tokens::update_social_proof_tokens_config(
                 &admin_cap,
                 &mut config,
                 150, // total_fee_bps 
@@ -218,18 +209,9 @@ module social_contracts::token_exchange_tests {
                 100_000,     // quadratic_coefficient
                 ECOSYSTEM_TREASURY,
                 500, // max_hold_percent_bps (5%)
-                10, // post_likes_weight
-                5,  // post_comments_weight
-                15, // post_tips_weight
-                100, // post_viral_threshold
-                10, // profile_follows_weight
-                5,  // profile_posts_weight
-                15, // profile_tips_weight
-                100, // profile_viral_threshold
-                3600, // min_post_auction_duration (1 hour)
-                86400, // max_post_auction_duration (24 hours)
-                86400, // min_profile_auction_duration (1 day)
-                604800, // max_profile_auction_duration (7 days)
+                1000_000_000, // post_threshold (1000 MYS)
+                10000_000_000, // profile_threshold (10000 MYS)
+                2000, // max_individual_stake_bps (20%)
                 test_scenario::ctx(&mut scenario)
             );
             
@@ -274,7 +256,7 @@ module social_contracts::token_exchange_tests {
         };
         
         // For testing, mock the viral threshold check by exposing the profile
-        // to be used with mock check_profile_viral_threshold from token_exchange
+        // to be used with mock check_profile_viral_threshold from social_proof_tokens
         let registry_id = {
             let registry = test_scenario::take_shared<UsernameRegistry>(scenario);
             let registry_id = object::id_address(&registry);
@@ -342,7 +324,7 @@ module social_contracts::token_exchange_tests {
         // Users contribute to the auction - using a mock object ID
         test_scenario::next_tx(&mut scenario, USER1);
         {
-            let registry = test_scenario::take_shared<token_exchange::TokenRegistry>(&scenario);
+            let registry = test_scenario::take_shared<social_proof_tokens::TokenRegistry>(&scenario);
             
             // Use a mock auction pool ID since we can't get it easily in tests
             // In a real implementation, we would need to track this properly
@@ -360,7 +342,7 @@ module social_contracts::token_exchange_tests {
         // User2 also contributes - mocked
         test_scenario::next_tx(&mut scenario, USER2);
         {
-            let registry = test_scenario::take_shared<token_exchange::TokenRegistry>(&scenario);
+            let registry = test_scenario::take_shared<social_proof_tokens::TokenRegistry>(&scenario);
             
             // Return the objects back
             test_scenario::return_shared(registry);
@@ -380,8 +362,8 @@ module social_contracts::token_exchange_tests {
         // Finalize the auction - mocked
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let registry = test_scenario::take_shared<token_exchange::TokenRegistry>(&scenario);
-            let config = test_scenario::take_shared<token_exchange::ExchangeConfig>(&scenario);
+            let registry = test_scenario::take_shared<social_proof_tokens::TokenRegistry>(&scenario);
+            let config = test_scenario::take_shared<social_proof_tokens::SocialProofTokensConfig>(&scenario);
             let clock = test_scenario::take_shared<Clock>(&scenario);
             
             // Set a mock token pool ID for later (using _ to suppress warning)
@@ -538,5 +520,207 @@ module social_contracts::token_exchange_tests {
         };
         
         test_scenario::end(scenario);
+    }
+
+    // === PoC Revenue Redirection Tests ===
+
+    #[test]
+    fun test_poc_redirection_setup() {
+        let mut scenario = setup_test_scenario();
+        
+        // Create a mock token pool to test PoC functionality
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            // Create a mock post token pool
+            let mut token_pool = create_mock_post_token_pool(&mut scenario);
+            
+            // Set PoC redirection data
+            social_proof_tokens::set_poc_redirection(
+                &mut token_pool,
+                option::some(USER3), // Original creator
+                option::some(75)     // 75% redirection
+            );
+            
+            // Verify PoC redirection is set
+            assert!(social_proof_tokens::has_poc_redirection(&token_pool), 0);
+            
+            let redirect_to = social_proof_tokens::get_poc_redirect_to(&token_pool);
+            let redirect_percentage = social_proof_tokens::get_poc_redirect_percentage(&token_pool);
+            
+            assert!(option::is_some(redirect_to), 1);
+            assert!(option::is_some(redirect_percentage), 2);
+            assert!(*option::borrow(redirect_to) == USER3, 3);
+            assert!(*option::borrow(redirect_percentage) == 75, 4);
+            
+            // Clean up by transferring back to test framework
+            transfer::public_transfer(token_pool, CREATOR);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    #[test] 
+    fun test_poc_redirection_clear() {
+        let mut scenario = setup_test_scenario();
+        
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            // Create a mock token pool with PoC redirection
+            let mut token_pool = create_mock_post_token_pool(&mut scenario);
+            
+            // Set PoC redirection
+            social_proof_tokens::set_poc_redirection(
+                &mut token_pool,
+                option::some(USER3),
+                option::some(50)
+            );
+            
+            // Verify it's set
+            assert!(social_proof_tokens::has_poc_redirection(&token_pool), 0);
+            
+            // Clear PoC redirection
+            social_proof_tokens::clear_poc_redirection(&mut token_pool);
+            
+            // Verify it's cleared
+            assert!(!social_proof_tokens::has_poc_redirection(&token_pool), 1);
+            
+            let redirect_to = social_proof_tokens::get_poc_redirect_to(&token_pool);
+            let redirect_percentage = social_proof_tokens::get_poc_redirect_percentage(&token_pool);
+            
+            assert!(option::is_none(redirect_to), 2);
+            assert!(option::is_none(redirect_percentage), 3);
+            
+            // Clean up by transferring back to test framework
+            transfer::public_transfer(token_pool, CREATOR);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_poc_revenue_redirection_simulation() {
+        let mut scenario = setup_test_scenario();
+        
+        // This test simulates the revenue redirection logic
+        // by manually calculating and verifying the splits
+        
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            let mut token_pool = create_mock_post_token_pool(&mut scenario);
+            
+            // Set PoC redirection: 60% to original creator (USER3)
+            social_proof_tokens::set_poc_redirection(
+                &mut token_pool,
+                option::some(USER3), // Original creator
+                option::some(60)     // 60% redirection
+            );
+            
+            // Simulate a trading fee of 100 MYS going to creator
+            let total_fee = 100 * MYS_SCALING;
+            let redirected_amount = (total_fee * 60) / 100; // 60 MYS to USER3
+            let remaining_amount = total_fee - redirected_amount; // 40 MYS to CREATOR
+            
+            // Verify calculations
+            assert!(redirected_amount == 60 * MYS_SCALING, 0);
+            assert!(remaining_amount == 40 * MYS_SCALING, 1);
+            
+            // Create coins to simulate the fee distribution
+            let redirected_coin = coin::mint_for_testing<MYS>(redirected_amount, test_scenario::ctx(&mut scenario));
+            let remaining_coin = coin::mint_for_testing<MYS>(remaining_amount, test_scenario::ctx(&mut scenario));
+            
+            // Transfer to simulate the PoC redirection
+            transfer::public_transfer(redirected_coin, USER3); // Original creator gets 60%
+            transfer::public_transfer(remaining_coin, CREATOR); // Post owner gets 40%
+            
+            // Clean up by transferring back to test framework
+            transfer::public_transfer(token_pool, CREATOR);
+        };
+        
+        // Verify USER3 received the redirected amount
+        test_scenario::next_tx(&mut scenario, USER3);
+        {
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            assert!(coin::value(&coins) == 60 * MYS_SCALING, 0);
+            test_scenario::return_to_sender(&scenario, coins);
+        };
+        
+        // Verify CREATOR received the remaining amount
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            let coins = test_scenario::take_from_sender<Coin<MYS>>(&scenario);
+            assert!(coin::value(&coins) >= 40 * MYS_SCALING, 0); // >= because creator has initial coins too
+            test_scenario::return_to_sender(&scenario, coins);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_token_pool_utility_functions() {
+        let mut scenario = setup_test_scenario();
+        
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            let token_pool = create_mock_post_token_pool(&mut scenario);
+            
+            // Test get_pool_associated_id
+            let associated_id = social_proof_tokens::get_pool_associated_id(&token_pool);
+            let expected_post_id = @0x123456; // Use valid address syntax
+            assert!(associated_id == expected_post_id, 0);
+            
+            // Test initial state (no PoC redirection)
+            assert!(!social_proof_tokens::has_poc_redirection(&token_pool), 1);
+            
+            let redirect_to = social_proof_tokens::get_poc_redirect_to(&token_pool);
+            let redirect_percentage = social_proof_tokens::get_poc_redirect_percentage(&token_pool);
+            
+            assert!(option::is_none(redirect_to), 2);
+            assert!(option::is_none(redirect_percentage), 3);
+            
+            // Clean up by transferring back to test framework
+            transfer::public_transfer(token_pool, CREATOR);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_token_registry_functions() {
+        let mut scenario = setup_test_scenario();
+        
+        test_scenario::next_tx(&mut scenario, CREATOR);
+        {
+            let registry = test_scenario::take_shared<TokenRegistry>(&scenario);
+            
+            // Test token_exists function with non-existent token
+            let fake_token_id = @0x999999;
+            assert!(!social_proof_tokens::token_exists(&registry, fake_token_id), 0);
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        test_scenario::end(scenario);
+    }
+
+    // Helper function to create a mock post token pool for testing
+    fun create_mock_post_token_pool(scenario: &mut Scenario): TokenPool {
+        // Create a mock token pool with post token type
+        let mock_token_info = social_proof_tokens::create_mock_token_info(
+            @0x111111,       // pool id
+            TOKEN_TYPE_POST, // post token type
+            CREATOR,         // owner
+            @0x123456,       // associated post id
+            string::utf8(b"PPOST"), // symbol
+            string::utf8(b"Post Token"), // name
+            1000,           // circulating supply
+            100_000_000,    // base price (0.1 MYS)
+            100_000,        // quadratic coefficient
+            0               // created_at
+        );
+        
+        social_proof_tokens::create_mock_token_pool(
+            mock_token_info,
+            test_scenario::ctx(scenario)
+        )
     }
 } 

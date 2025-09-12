@@ -1,4 +1,4 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 #[test_only]
@@ -65,10 +65,11 @@ module social_contracts::platform_tests {
             test_scenario::return_shared(registry);
         };
 
-        // Add moderator to platform
+        // Add moderator to platform and set approval
         test_scenario::next_tx(scenario, PLATFORM_ADMIN);
         {
             let mut platform = test_scenario::take_from_sender<Platform>(scenario);
+            let mut registry = test_scenario::take_shared<PlatformRegistry>(scenario);
             
             platform::add_moderator(
                 &mut platform,
@@ -76,10 +77,12 @@ module social_contracts::platform_tests {
                 test_scenario::ctx(scenario)
             );
             
-            // Set platform as approved
-            platform::test_set_approval(&mut platform, true);
+            // Set platform as approved in registry
+            let platform_id = object::uid_to_address(platform::id(&platform));
+            platform::test_set_approval(&mut registry, platform_id, true);
             
             test_scenario::return_to_sender(scenario, platform);
+            test_scenario::return_shared(registry);
         };
     }
 

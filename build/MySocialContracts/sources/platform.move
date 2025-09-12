@@ -1,20 +1,25 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Platform module for the MySocial network
 /// Manages social media platforms and their timelines
 
+#[allow(duplicate_alias, unused_use)]
 module social_contracts::platform {
-    use std::string::{Self, String};
+    use std::{string::{Self, String}, option, vector};
     
-    use mys::dynamic_field;
-    use mys::vec_set::{Self, VecSet};
-    use mys::table::{Self, Table};
-    use mys::coin::{Self, Coin};
-    use mys::balance::{Self, Balance};
-    use mys::mys::MYS;
-    use mys::package::{Self, Publisher};
-    use mys::event;
+    use mys::{
+        object::{Self, UID, ID},
+        tx_context::{Self, TxContext},
+        transfer,
+        dynamic_field,
+        vec_set::{Self, VecSet},
+        table::{Self, Table},
+        coin::{Self, Coin},
+        balance::{Self, Balance},
+        mys::MYS,
+        event
+    };
     
     use social_contracts::profile;
     use social_contracts::governance;
@@ -26,12 +31,11 @@ module social_contracts::platform {
     const EAlreadyBlocked: u64 = 2;
     const ENotBlocked: u64 = 3;
     const EInvalidTokenAmount: u64 = 4;
-    const ENotContractOwner: u64 = 5;
-    const EAlreadyJoined: u64 = 6;
-    const ENotJoined: u64 = 7;
-    const EWrongVersion: u64 = 8;
-    const EInsufficientTreasuryFunds: u64 = 9;
-    const EEmptyRecipientsList: u64 = 10;
+    const EAlreadyJoined: u64 = 5;
+    const ENotJoined: u64 = 6;
+    const EWrongVersion: u64 = 7;
+    const EInsufficientTreasuryFunds: u64 = 8;
+    const EEmptyRecipientsList: u64 = 9;
 
     /// Field names for dynamic fields
     const MODERATORS_FIELD: vector<u8> = b"moderators";
@@ -50,6 +54,11 @@ module social_contracts::platform {
     /// Platform status enum
     public struct PlatformStatus has copy, drop, store {
         status: u8,
+    }
+
+    /// Admin capability for Platform system management
+    public struct PlatformAdminCap has key, store {
+        id: UID,
     }
 
     /// Platform object that contains information about a social media platform
@@ -83,8 +92,6 @@ module social_contracts::platform {
         created_at: u64,
         /// Platform-specific MYS tokens treasury
         treasury: Balance<MYS>,
-        /// Whether the platform is approved by the contract owner
-        approved: bool,
         /// Whether the platform wants DAO governance
         wants_dao_governance: bool,
         /// DAO governance configuration parameters (all optional)
@@ -109,6 +116,8 @@ module social_contracts::platform {
         platforms_by_name: Table<String, address>,
         /// Table mapping developer addresses to their platforms
         platforms_by_developer: Table<address, vector<address>>,
+        /// Table mapping platform IDs to their approval status (admin-controlled)
+        platform_approvals: Table<address, bool>,
         /// Version for upgrades
         version: u64,
     }
@@ -206,13 +215,13 @@ module social_contracts::platform {
         timestamp: u64,
     }
 
-    /// Create and share the global platform registry
-    /// This should be called once during system initialization
-    fun init(ctx: &mut TxContext) {
+    /// Bootstrap initialization function - creates the platform registry
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
         let registry = PlatformRegistry {
             id: object::new(ctx),
             platforms_by_name: table::new(ctx),
             platforms_by_developer: table::new(ctx),
+            platform_approvals: table::new(ctx),
             version: upgrade::current_version(),
         };
 
@@ -291,7 +300,6 @@ module social_contracts::platform {
             shutdown_date: option::none(),
             created_at: now,
             treasury: balance::zero(),
-            approved: false, // New platforms are not approved by default
             wants_dao_governance,
             delegate_count: actual_delegate_count,
             delegate_term_epochs: actual_delegate_term_epochs,
@@ -326,6 +334,9 @@ module social_contracts::platform {
         };
         let developer_platforms = table::borrow_mut(&mut registry.platforms_by_developer, developer);
         vector::push_back(developer_platforms, platform_id);
+        
+        // Add to platform approvals (starts as not approved)
+        table::add(&mut registry.platform_approvals, platform_id, false);
         
         // Emit platform created event
         event::emit(PlatformCreatedEvent {
@@ -561,90 +572,31 @@ module social_contracts::platform {
         });
     }
 
-    /// Toggle platform approval status (requires Publisher)
+    /// Toggle platform approval status (requires PlatformAdminCap only)
     public entry fun toggle_platform_approval(
-        platform: &mut Platform,
-        publisher: &Publisher,
+        registry: &mut PlatformRegistry,
+        platform_id: address,
+        _: &PlatformAdminCap,
         ctx: &mut TxContext
     ) {
-        // Verify caller has a valid publisher for this module
-        assert!(package::from_module<Platform>(publisher), ENotContractOwner);
+        // Check version compatibility
+        assert!(registry.version == upgrade::current_version(), EWrongVersion);
         
-        // Toggle approval status
-        platform.approved = !platform.approved;
+        // Admin capability verification is handled by type system
+        // Verify the platform exists in the registry
+        assert!(table::contains(&registry.platform_approvals, platform_id), EUnauthorized);
         
-        // If platform is now approved and wants DAO governance, create governance registry
-        if (platform.approved && platform.wants_dao_governance && option::is_none(&platform.governance_registry_id)) {
-            // Use default values if options are None
-            let delegate_count = if (option::is_some(&platform.delegate_count)) {
-                *option::borrow(&platform.delegate_count)
-            } else {
-                7 // Default value
-            };
-            
-            let delegate_term_epochs = if (option::is_some(&platform.delegate_term_epochs)) {
-                *option::borrow(&platform.delegate_term_epochs)
-            } else {
-                30 // Default value
-            };
-            
-            let proposal_submission_cost = if (option::is_some(&platform.proposal_submission_cost)) {
-                *option::borrow(&platform.proposal_submission_cost)
-            } else {
-                50_000_000 // Default value
-            };
-            
-            let min_on_chain_age_days = if (option::is_some(&platform.min_on_chain_age_days)) {
-                *option::borrow(&platform.min_on_chain_age_days)
-            } else {
-                7 // Default value
-            };
-            
-            let max_votes_per_user = if (option::is_some(&platform.max_votes_per_user)) {
-                *option::borrow(&platform.max_votes_per_user)
-            } else {
-                5 // Default value
-            };
-            
-            let quadratic_base_cost = if (option::is_some(&platform.quadratic_base_cost)) {
-                *option::borrow(&platform.quadratic_base_cost)
-            } else {
-                5_000_000 // Default value
-            };
-            
-            let voting_period_epochs = if (option::is_some(&platform.voting_period_epochs)) {
-                *option::borrow(&platform.voting_period_epochs)
-            } else {
-                3 // Default value
-            };
-            
-            let quorum_votes = if (option::is_some(&platform.quorum_votes)) {
-                *option::borrow(&platform.quorum_votes)
-            } else {
-                15 // Default value
-            };
-            
-            // Create governance registry for this platform
-            let registry_id = governance::create_platform_governance(
-                delegate_count,
-                delegate_term_epochs,
-                proposal_submission_cost,
-                min_on_chain_age_days,
-                max_votes_per_user,
-                quadratic_base_cost,
-                voting_period_epochs,
-                quorum_votes,
-                ctx
-            );
-            
-            // Store registry ID in the platform
-            platform.governance_registry_id = option::some(registry_id);
-        };
+        // Get current approval status and toggle it
+        let current_approval = *table::borrow(&registry.platform_approvals, platform_id);
+        let new_approval = !current_approval;
+        
+        // Update the approval status in the registry
+        *table::borrow_mut(&mut registry.platform_approvals, platform_id) = new_approval;
         
         // Emit approval status changed event
         event::emit(PlatformApprovalChangedEvent {
-            platform_id: object::uid_to_address(&platform.id),
-            approved: platform.approved,
+            platform_id,
+            approved: new_approval,
             changed_by: tx_context::sender(ctx),
         });
     }
@@ -675,7 +627,8 @@ module social_contracts::platform {
     /// Checks for blocks before allowing the join and verifies platform is approved
     /// Uses the caller's wallet address to find their profile for security
     public entry fun join_platform(
-        registry: &profile::UsernameRegistry,
+        profile_registry: &profile::UsernameRegistry,
+        platform_registry: &PlatformRegistry,
         platform: &mut Platform,
         ctx: &mut TxContext
     ) {
@@ -684,7 +637,7 @@ module social_contracts::platform {
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         
         // Look up the caller's profile ID from registry
-        let mut caller_profile_id_opt = profile::lookup_profile_by_owner(registry, caller);
+        let mut caller_profile_id_opt = profile::lookup_profile_by_owner(profile_registry, caller);
         assert!(option::is_some(&caller_profile_id_opt), EUnauthorized);
         
         // Extract profile ID and convert to ID type
@@ -694,8 +647,9 @@ module social_contracts::platform {
         // Check if the platform has blocked this profile
         assert!(!is_profile_blocked(platform, profile_id_addr), EUnauthorized);
         
-        // Check if the platform is approved by the contract owner
-        assert!(platform.approved, EUnauthorized);
+        // Check if the platform is approved by the contract owner (use registry)
+        let platform_id_addr = object::uid_to_address(&platform.id);
+        assert!(is_approved(platform_registry, platform_id_addr), EUnauthorized);
         
         // Create joined profiles set if it doesn't exist
         if (!dynamic_field::exists_(&platform.id, JOINED_PROFILES_FIELD)) {
@@ -760,9 +714,12 @@ module social_contracts::platform {
         });
     }
 
-    /// Get platform approval status
-    public fun is_approved(platform: &Platform): bool {
-        platform.approved
+    /// Get platform approval status from registry
+    public fun is_approved(registry: &PlatformRegistry, platform_id: address): bool {
+        if (!table::contains(&registry.platform_approvals, platform_id)) {
+            return false
+        };
+        *table::borrow(&registry.platform_approvals, platform_id)
     }
 
     /// Check if a profile has joined a platform
@@ -1130,6 +1087,7 @@ module social_contracts::platform {
             id: object::new(ctx),
             platforms_by_name: table::new(ctx),
             platforms_by_developer: table::new(ctx),
+            platform_approvals: table::new(ctx),
             version: 1, // Set to version 1 for testing
         };
 
@@ -1154,10 +1112,22 @@ module social_contracts::platform {
             vec_set::insert(joined_profiles, profile_id);
         };
     }
+
+    /// Create a PlatformAdminCap for bootstrap (package visibility only)
+    /// This function is only callable by other modules in the same package
+    public(package) fun create_platform_admin_cap(ctx: &mut TxContext): PlatformAdminCap {
+        PlatformAdminCap {
+            id: object::new(ctx)
+        }
+    }
     
     #[test_only]
-    /// Test helper to set the approval status of a platform
-    public fun test_set_approval(platform: &mut Platform, approved: bool) {
-        platform.approved = approved;
+    /// Test helper to set the approval status of a platform in the registry
+    public fun test_set_approval(registry: &mut PlatformRegistry, platform_id: address, approved: bool) {
+        if (!table::contains(&registry.platform_approvals, platform_id)) {
+            table::add(&mut registry.platform_approvals, platform_id, approved);
+        } else {
+            *table::borrow_mut(&mut registry.platform_approvals, platform_id) = approved;
+        };
     }
 }

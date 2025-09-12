@@ -1,4 +1,5 @@
 // Copyright (c) Mysten Labs, Inc.
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Similar to `mys::table` but the values are linked together, allowing for ordered insertion and

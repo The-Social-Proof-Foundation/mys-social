@@ -1,20 +1,29 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Profile module for the MySocial network
 /// Handles user identity, profile creation, management, and username registration
 
+#[allow(duplicate_alias)]
 module social_contracts::profile {
     use std::string::{Self, String};
     use std::ascii;
     
-    use mys::dynamic_field;
-    use mys::event;
-    use mys::table::{Self, Table};
-    use mys::coin::{Self, Coin};
-    use mys::balance::Balance;
+    use mys::{
+        object::{Self, UID},
+        tx_context::{Self, TxContext},
+        transfer,
+        dynamic_field,
+        event,
+        table::{Self, Table},
+        coin::{Self, Coin},
+        balance::{Self, Balance},
+        url::{Self, Url},
+        clock::{Self, Clock}
+    };
     use mys::mys::MYS;
-    use mys::url::{Self, Url};
+
+    use social_contracts::subscription::{Self, ProfileSubscriptionService, ProfileSubscription};
     
     use social_contracts::upgrade;
 
@@ -35,8 +44,14 @@ module social_contracts::profile {
     const EOfferBelowMinimum: u64 = 12;
     const EBadgeNotFound: u64 = 13;
     const EBadgeAlreadyExists: u64 = 14;
+    // Vesting error codes
+    const EInvalidStartTime: u64 = 15;
+    const ENotVestingWalletOwner: u64 = 16;
 
     const PROFILE_SALE_FEE_BPS: u64 = 500;
+    
+    // Fixed-point precision for curve calculations (1000 = 1.0)
+    const CURVE_PRECISION: u64 = 1000;
 
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -68,6 +83,8 @@ module social_contracts::profile {
     const USERNAME_FIELD: vector<u8> = b"username";
     // Field name for offers
     const OFFERS_FIELD: vector<u8> = b"profile_offers";
+    // Field for storing MyIP data references
+    const MY_IP_DATA_FIELD: vector<u8> = b"my_ip_data";
 
     /// Social Ecosystem Treasury that receives fees from profile sales
     public struct EcosystemTreasury has key {
@@ -86,7 +103,6 @@ module social_contracts::profile {
         // Version of the registry, allows for controlled upgrades
         version: u64,
     }
-
     
     /// Profile object that contains user information
     public struct Profile has key, store {
@@ -103,32 +119,6 @@ module social_contracts::profile {
         created_at: u64,
         /// Profile owner address
         owner: address,
-        /// Birthdate as encrypted string (optional)
-        birthdate: Option<String>,
-        /// Current location as encrypted string (optional)
-        current_location: Option<String>,
-        /// Raised location as encrypted string (optional)
-        raised_location: Option<String>,
-        /// Phone number as encrypted string (optional)
-        phone: Option<String>,
-        /// Email as encrypted string (optional)
-        email: Option<String>,
-        /// Is email verified flag
-        is_email_verified: bool,
-        /// Gender as encrypted string (optional)
-        gender: Option<String>,
-        /// Political view as encrypted string (optional)
-        political_view: Option<String>,
-        /// Religion as encrypted string (optional)
-        religion: Option<String>,
-        /// Education as encrypted string (optional)
-        education: Option<String>,
-        /// Website as encrypted string (optional)
-        website: Option<String>,
-        /// Primary language as encrypted string (optional)
-        primary_language: Option<String>,
-        /// Relationship status as encrypted string (optional)
-        relationship_status: Option<String>,
         /// X/Twitter username as encrypted string (optional)
         x_username: Option<String>,
         /// Mastodon username as encrypted string (optional)
@@ -139,6 +129,8 @@ module social_contracts::profile {
         reddit_username: Option<String>,
         /// GitHub username as encrypted string (optional)
         github_username: Option<String>,
+        /// Instagram username as encrypted string (optional)
+        instagram_username: Option<String>,
         /// Last updated timestamp for profile data
         last_updated: u64,
         /// Number of followers
@@ -153,6 +145,8 @@ module social_contracts::profile {
         min_offer_amount: Option<u64>,
         /// Collection of badges assigned to the profile
         badges: vector<ProfileBadge>,
+        /// Vector tracking attached MyIP IDs for efficient iteration
+        attached_my_ip_ids: vector<address>,
     }
 
     /// Profile Badge that can be assigned to profiles by platform admins/moderators
@@ -174,6 +168,27 @@ module social_contracts::profile {
         issued_by: address,
         /// Badge type/tier (1-100), allows for badge hierarchy
         badge_type: u8,
+    }
+
+
+
+    /// Vesting Wallet contains MYS coins that are available for claiming over time
+    public struct VestingWallet has key, store {
+        id: UID,
+        /// Balance of MYS coins remaining in the wallet
+        balance: Balance<MYS>,
+        /// Address of the wallet owner who can claim the tokens
+        owner: address,
+        /// Time when the vesting started (in milliseconds)
+        start_time: u64,
+        /// Amount of coins that have been claimed
+        claimed_amount: u64,
+        /// Total duration of the vesting schedule (in milliseconds)
+        duration: u64,
+        /// Total amount originally vested
+        total_amount: u64,
+        /// Curve factor (1000 = linear, >1000 = more at end, <1000 = more at start)
+        curve_factor: u64,
     }
 
     // === Events ===
@@ -232,25 +247,13 @@ module social_contracts::profile {
         cover_photo: Option<String>,
         owner: address,
         updated_at: u64,
-        // Sensitive fields (all encrypted client-side)
-        birthdate: Option<String>,
-        current_location: Option<String>,
-        raised_location: Option<String>,
-        phone: Option<String>,
-        email: Option<String>,
-        is_email_verified: bool,
-        gender: Option<String>,
-        political_view: Option<String>,
-        religion: Option<String>,
-        education: Option<String>,
-        website: Option<String>,
-        primary_language: Option<String>,
-        relationship_status: Option<String>,
+        // Social media usernames
         x_username: Option<String>,
         mastodon_username: Option<String>,
         facebook_username: Option<String>,
         reddit_username: Option<String>,
         github_username: Option<String>,
+        instagram_username: Option<String>,
         min_offer_amount: Option<u64>,
     }
 
@@ -300,8 +303,28 @@ module social_contracts::profile {
         timestamp: u64,
     }
 
-    /// Module initializer to create the username registry
-    fun init(ctx: &mut TxContext) {
+    /// Event emitted when MYS tokens are vested
+    public struct TokensVestedEvent has copy, drop {
+        wallet_id: address,
+        owner: address,
+        total_amount: u64,
+        start_time: u64,
+        duration: u64,
+        curve_factor: u64,
+        vested_at: u64,
+    }
+
+    /// Event emitted when vested tokens are claimed
+    public struct TokensClaimedEvent has copy, drop {
+        wallet_id: address,
+        owner: address,
+        claimed_amount: u64,
+        remaining_balance: u64,
+        claimed_at: u64,
+    }
+    
+    /// Bootstrap initialization function - creates the username registry and treasury
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
         // Import current version from upgrade module
         let current_version = upgrade::current_version();
         
@@ -454,24 +477,12 @@ module social_contracts::profile {
             cover_photo,
             created_at: now,
             owner,
-            birthdate: option::none(),
-            current_location: option::none(),
-            raised_location: option::none(),
-            phone: option::none(),
-            email: option::none(),
-            is_email_verified: false,
-            gender: option::none(),
-            political_view: option::none(),
-            religion: option::none(),
-            education: option::none(),
-            website: option::none(),
-            primary_language: option::none(),
-            relationship_status: option::none(),
             x_username: option::none(),
             mastodon_username: option::none(),
             facebook_username: option::none(),
             reddit_username: option::none(),
             github_username: option::none(),
+            instagram_username: option::none(),
             last_updated: now,
             followers_count: 0,
             following_count: 0,
@@ -479,6 +490,7 @@ module social_contracts::profile {
             tips_received: 0,
             min_offer_amount: option::none(),
             badges: vector::empty<ProfileBadge>(),
+            attached_my_ip_ids: vector::empty<address>(),
         };
         
         // Get the profile ID
@@ -593,25 +605,13 @@ module social_contracts::profile {
             },
             owner: new_owner,
             updated_at: tx_context::epoch(ctx),
-            // Include all sensitive fields
-            birthdate: profile.birthdate,
-            current_location: profile.current_location,
-            raised_location: profile.raised_location,
-            phone: profile.phone,
-            email: profile.email,
-            is_email_verified: profile.is_email_verified,
-            gender: profile.gender,
-            political_view: profile.political_view,
-            religion: profile.religion,
-            education: profile.education,
-            website: profile.website,
-            primary_language: profile.primary_language,
-            relationship_status: profile.relationship_status,
+            // Social media usernames
             x_username: profile.x_username,
             mastodon_username: profile.mastodon_username,
             facebook_username: profile.facebook_username,
             reddit_username: profile.reddit_username,
             github_username: profile.github_username,
+            instagram_username: profile.instagram_username,
             min_offer_amount: profile.min_offer_amount,
         });
         
@@ -628,24 +628,13 @@ module social_contracts::profile {
         new_bio: String,
         new_profile_picture_url: vector<u8>,
         new_cover_photo_url: vector<u8>,
-        // Sensitive profile fields (all optional)
-        birthdate: Option<String>,
-        current_location: Option<String>,
-        raised_location: Option<String>,
-        phone: Option<String>,
-        email: Option<String>,
-        gender: Option<String>,
-        political_view: Option<String>,
-        religion: Option<String>,
-        education: Option<String>,
-        website: Option<String>,
-        primary_language: Option<String>,
-        relationship_status: Option<String>,
+        // Social media usernames (all optional)
         x_username: Option<String>,
         mastodon_username: Option<String>,
         facebook_username: Option<String>,
         reddit_username: Option<String>,
         github_username: Option<String>,
+        instagram_username: Option<String>,
         min_offer_amount: Option<u64>,
         ctx: &mut TxContext
     ) {
@@ -671,55 +660,7 @@ module social_contracts::profile {
             profile.cover_photo = option::some(url::new_unsafe_from_bytes(new_cover_photo_url));
         };
 
-        // Update sensitive profile details if provided
-        if (option::is_some(&birthdate)) {
-            profile.birthdate = birthdate;
-        };
-        
-        if (option::is_some(&current_location)) {
-            profile.current_location = current_location;
-        };
-        
-        if (option::is_some(&raised_location)) {
-            profile.raised_location = raised_location;
-        };
-        
-        if (option::is_some(&phone)) {
-            profile.phone = phone;
-        };
-        
-        if (option::is_some(&email)) {
-            profile.email = email;
-        };
-        
-        if (option::is_some(&gender)) {
-            profile.gender = gender;
-        };
-        
-        if (option::is_some(&political_view)) {
-            profile.political_view = political_view;
-        };
-        
-        if (option::is_some(&religion)) {
-            profile.religion = religion;
-        };
-        
-        if (option::is_some(&education)) {
-            profile.education = education;
-        };
-        
-        if (option::is_some(&website)) {
-            profile.website = website;
-        };
-        
-        if (option::is_some(&primary_language)) {
-            profile.primary_language = primary_language;
-        };
-        
-        if (option::is_some(&relationship_status)) {
-            profile.relationship_status = relationship_status;
-        };
-        
+        // Update social media usernames if provided
         if (option::is_some(&x_username)) {
             profile.x_username = x_username;
         };
@@ -738,6 +679,10 @@ module social_contracts::profile {
         
         if (option::is_some(&github_username)) {
             profile.github_username = github_username;
+        };
+
+        if (option::is_some(&instagram_username)) {
+            profile.instagram_username = instagram_username;
         };
 
         if (option::is_some(&min_offer_amount)) {
@@ -780,25 +725,13 @@ module social_contracts::profile {
             cover_photo: cover_photo_string,
             owner: profile.owner,
             updated_at: now,
-            // Include all sensitive fields
-            birthdate: profile.birthdate,
-            current_location: profile.current_location,
-            raised_location: profile.raised_location,
-            phone: profile.phone,
-            email: profile.email,
-            is_email_verified: profile.is_email_verified,
-            gender: profile.gender,
-            political_view: profile.political_view,
-            religion: profile.religion,
-            education: profile.education,
-            website: profile.website,
-            primary_language: profile.primary_language,
-            relationship_status: profile.relationship_status,
+            // Social media usernames
             x_username: profile.x_username,
             mastodon_username: profile.mastodon_username,
             facebook_username: profile.facebook_username,
             reddit_username: profile.reddit_username,
             github_username: profile.github_username,
+            instagram_username: profile.instagram_username,
             min_offer_amount: profile.min_offer_amount,
         });
     }
@@ -1009,6 +942,182 @@ module social_contracts::profile {
         profile.following_count
     }
 
+    /// Create a subscription service for this profile (creates separate service object)
+    public entry fun create_subscription_service(
+        profile: &Profile,
+        monthly_fee: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
+        
+        // Create the subscription service and share it
+        subscription::create_profile_service_entry(monthly_fee, ctx);
+    }
+
+    /// Check if a viewer has a valid subscription (uses subscription module functions)
+    public fun has_valid_subscription(
+        subscription: &ProfileSubscription,
+        service: &ProfileSubscriptionService,
+        clock: &Clock,
+    ): bool {
+        subscription::is_subscription_valid(subscription, service, clock)
+    }
+
+    /// Attach MyIP to profile for data monetization
+    public entry fun attach_my_ip(
+        profile: &mut Profile,
+        my_ip_id: address,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
+        
+        // Initialize table if it doesn't exist
+        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+            let tbl = table::new<address, bool>(ctx);
+            dynamic_field::add(&mut profile.id, MY_IP_DATA_FIELD, tbl);
+        };
+        
+        let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
+            &mut profile.id,
+            MY_IP_DATA_FIELD,
+        );
+        
+        // Only add if not already attached
+        if (!table::contains(tbl, my_ip_id)) {
+            table::add(tbl, my_ip_id, true);
+            // Also add to the tracking vector for efficient iteration
+            vector::push_back(&mut profile.attached_my_ip_ids, my_ip_id);
+        };
+    }
+
+    /// Check if a MyIP is attached to this profile
+    public fun has_my_ip_attached(profile: &Profile, my_ip_id: address): bool {
+        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+            return false
+        };
+        let tbl = dynamic_field::borrow<vector<u8>, Table<address, bool>>(
+            &profile.id,
+            MY_IP_DATA_FIELD,
+        );
+        table::contains(tbl, my_ip_id)
+    }
+
+    /// Remove a MyIP attachment from the profile
+    public entry fun detach_my_ip(
+        profile: &mut Profile,
+        my_ip_id: address,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
+        
+        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+            return
+        };
+        
+        let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
+            &mut profile.id,
+            MY_IP_DATA_FIELD,
+        );
+        
+        if (table::contains(tbl, my_ip_id)) {
+            table::remove(tbl, my_ip_id);
+            
+            // Also remove from the tracking vector
+            let mut i = 0;
+            let len = vector::length(&profile.attached_my_ip_ids);
+            while (i < len) {
+                if (*vector::borrow(&profile.attached_my_ip_ids, i) == my_ip_id) {
+                    vector::remove(&mut profile.attached_my_ip_ids, i);
+                    break
+                };
+                i = i + 1;
+            };
+        };
+    }
+
+    /// Get all attached MyIP IDs for this profile
+    public fun get_attached_my_ips(profile: &Profile): vector<address> {
+        // Return a copy of the attached MyIP IDs vector for efficient iteration
+        profile.attached_my_ip_ids
+    }
+
+    /// Batch attach multiple MyIPs to profile for gas optimization
+    public entry fun batch_attach_my_ips(
+        profile: &mut Profile,
+        my_ip_ids: vector<address>,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
+        
+        // Initialize table if it doesn't exist
+        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+            let tbl = table::new<address, bool>(ctx);
+            dynamic_field::add(&mut profile.id, MY_IP_DATA_FIELD, tbl);
+        };
+        
+        let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
+            &mut profile.id,
+            MY_IP_DATA_FIELD,
+        );
+        
+        let mut i = 0;
+        let len = vector::length(&my_ip_ids);
+        
+        while (i < len) {
+            let my_ip_id = *vector::borrow(&my_ip_ids, i);
+            
+            // Only add if not already attached
+            if (!table::contains(tbl, my_ip_id)) {
+                table::add(tbl, my_ip_id, true);
+                vector::push_back(&mut profile.attached_my_ip_ids, my_ip_id);
+            };
+            
+            i = i + 1;
+        };
+    }
+
+    /// Batch detach multiple MyIPs from profile for gas optimization
+    public entry fun batch_detach_my_ips(
+        profile: &mut Profile,
+        my_ip_ids: vector<address>,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
+        
+        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+            return
+        };
+        
+        let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
+            &mut profile.id,
+            MY_IP_DATA_FIELD,
+        );
+        
+        let mut i = 0;
+        let len = vector::length(&my_ip_ids);
+        
+        while (i < len) {
+            let my_ip_id = *vector::borrow(&my_ip_ids, i);
+            
+            if (table::contains(tbl, my_ip_id)) {
+                table::remove(tbl, my_ip_id);
+                
+                // Remove from tracking vector
+                let mut j = 0;
+                let vec_len = vector::length(&profile.attached_my_ip_ids);
+                while (j < vec_len) {
+                    if (*vector::borrow(&profile.attached_my_ip_ids, j) == my_ip_id) {
+                        vector::remove(&mut profile.attached_my_ip_ids, j);
+                        break
+                    };
+                    j = j + 1;
+                };
+            };
+            
+            i = i + 1;
+        };
+    }
+
     /// Create an offer to purchase a profile
     /// Locks MYSO tokens in the offer
     public entry fun create_offer(
@@ -1170,25 +1279,13 @@ module social_contracts::profile {
             },
             owner: offeror,
             updated_at: now,
-            // Include all sensitive fields
-            birthdate: profile.birthdate,
-            current_location: profile.current_location,
-            raised_location: profile.raised_location,
-            phone: profile.phone,
-            email: profile.email,
-            is_email_verified: profile.is_email_verified,
-            gender: profile.gender,
-            political_view: profile.political_view,
-            religion: profile.religion,
-            education: profile.education,
-            website: profile.website,
-            primary_language: profile.primary_language,
-            relationship_status: profile.relationship_status,
+            // Social media usernames
             x_username: profile.x_username,
             mastodon_username: profile.mastodon_username,
             facebook_username: profile.facebook_username,
             reddit_username: profile.reddit_username,
             github_username: profile.github_username,
+            instagram_username: profile.instagram_username,
             min_offer_amount: profile.min_offer_amount,
         });
         
@@ -1331,7 +1428,7 @@ module social_contracts::profile {
     #[test_only]
     /// Initialize the profile registry for testing
     public fun init_for_testing(ctx: &mut TxContext) {
-        init(ctx)
+        bootstrap_init(ctx)
     }
 
     #[test_only]
@@ -1355,24 +1452,12 @@ module social_contracts::profile {
             cover_photo: option::none(),
             created_at: epoch,
             owner,
-            birthdate: option::none(),
-            current_location: option::none(),
-            raised_location: option::none(),
-            phone: option::none(),
-            email: option::none(),
-            is_email_verified: false,
-            gender: option::none(),
-            political_view: option::none(),
-            religion: option::none(),
-            education: option::none(),
-            website: option::none(),
-            primary_language: option::none(),
-            relationship_status: option::none(),
             x_username: option::none(),
             mastodon_username: option::none(),
             facebook_username: option::none(),
             reddit_username: option::none(),
             github_username: option::none(),
+            instagram_username: option::none(),
             last_updated: epoch,
             followers_count: 0,
             post_count: 0,
@@ -1380,6 +1465,7 @@ module social_contracts::profile {
             following_count: 0,
             min_offer_amount: option::none(),
             badges: vector::empty<ProfileBadge>(),
+            attached_my_ip_ids: vector::empty<address>(),
         };
         
         // Get the profile ID and use it for registration
@@ -1557,73 +1643,266 @@ module social_contracts::profile {
     public fun badge_count(profile: &Profile): u64 {
         vector::length(&profile.badges)
     }
-    
-    /// Get whether the email is verified for a profile
-    public fun is_email_verified(profile: &Profile): bool {
-        profile.is_email_verified
-    }
-    
-    /// Toggle the email verification status for a profile
-    /// Only the admin with the UpgradeAdminCap can call this function
-    public entry fun toggle_email_verification(
-        profile: &mut Profile,
-        _admin_cap: &upgrade::UpgradeAdminCap,
-        is_verified: bool,
+
+    // === Vesting Functions ===
+
+    /// Create a new vesting wallet with MYS tokens that vest over time with configurable curve
+    /// The start time must be in the future and duration must be greater than 0
+    /// curve_factor: 0 or 1000 = linear, >1000 = more tokens at end, <1000 = more tokens at start
+    /// 
+    /// Example Curves:
+    /// Exponential (curve_factor = 2000):
+    /// 25% time → ~6% tokens
+    /// 50% time → ~25% tokens
+    /// 75% time → ~56% tokens
+    /// 100% time → 100% tokens
+    /// Logarithmic (curve_factor = 500):
+    /// 25% time → ~44% tokens
+    /// 50% time → ~75% tokens
+    /// 75% time → ~94% tokens
+    /// 100% time → 100% tokens
+
+    public entry fun vest_myso(
+        coin: Coin<MYS>,
+        recipient: address,
+        start_time: u64,
+        duration: u64,
+        curve_factor: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
-        // Admin check is implicit through the requirement of the UpgradeAdminCap
-        let _admin = tx_context::sender(ctx);
-        
-        // Update the email verification status
-        profile.is_email_verified = is_verified;
-        
-        // Get the profile ID for the event
-        let profile_id = object::uid_to_address(&profile.id);
-        
-        // Emit profile updated event to reflect the change in verification status
-        event::emit(ProfileUpdatedEvent {
-            profile_id,
-            display_name: profile.display_name,
-            username: if (dynamic_field::exists_(&profile.id, USERNAME_FIELD)) {
-                option::some(*dynamic_field::borrow<vector<u8>, String>(&profile.id, USERNAME_FIELD))
-            } else {
-                option::none()
-            },
-            bio: profile.bio,
-            profile_picture: if (option::is_some(&profile.profile_picture)) {
-                let url = option::borrow(&profile.profile_picture);
-                option::some(ascii_to_string(url::inner_url(url)))
-            } else {
-                option::none()
-            },
-            cover_photo: if (option::is_some(&profile.cover_photo)) {
-                let url = option::borrow(&profile.cover_photo);
-                option::some(ascii_to_string(url::inner_url(url)))
-            } else {
-                option::none()
-            },
-            owner: profile.owner,
-            updated_at: tx_context::epoch(ctx),
-            // Include all sensitive fields
-            birthdate: profile.birthdate,
-            current_location: profile.current_location,
-            raised_location: profile.raised_location,
-            phone: profile.phone,
-            email: profile.email,
-            is_email_verified: profile.is_email_verified,
-            gender: profile.gender,
-            political_view: profile.political_view,
-            religion: profile.religion,
-            education: profile.education,
-            website: profile.website,
-            primary_language: profile.primary_language,
-            relationship_status: profile.relationship_status,
-            x_username: profile.x_username,
-            mastodon_username: profile.mastodon_username,
-            facebook_username: profile.facebook_username,
-            reddit_username: profile.reddit_username,
-            github_username: profile.github_username,
-            min_offer_amount: profile.min_offer_amount,
+        // Validate that start time is in the future
+        let current_time = clock::timestamp_ms(clock);
+        assert!(start_time > current_time, EInvalidStartTime);
+
+        // Validate that duration is greater than 0
+        assert!(duration > 0, EInvalidStartTime);
+
+        let total_amount = coin::value(&coin);
+        assert!(total_amount > 0, EInsufficientTokens);
+
+        // Default to linear if curve_factor is 0
+        let final_curve_factor = if (curve_factor == 0) {
+            CURVE_PRECISION // 1000 = linear
+        } else {
+            // Validate curve factor is reasonable (between 100 and 10000, i.e., 0.1x to 10x)
+            assert!(curve_factor >= 100 && curve_factor <= 10000, EInvalidStartTime);
+            curve_factor
+        };
+
+        // Create the vesting wallet
+        let wallet = VestingWallet {
+            id: object::new(ctx),
+            balance: coin::into_balance(coin),
+            owner: recipient,
+            start_time,
+            claimed_amount: 0,
+            duration,
+            total_amount,
+            curve_factor: final_curve_factor,
+        };
+
+        let wallet_id = object::uid_to_address(&wallet.id);
+
+        // Emit vesting event
+        event::emit(TokensVestedEvent {
+            wallet_id,
+            owner: recipient,
+            total_amount,
+            start_time,
+            duration,
+            curve_factor: final_curve_factor,
+            vested_at: current_time,
         });
+
+        // Transfer the vesting wallet to the recipient
+        transfer::public_transfer(wallet, recipient);
     }
+
+    /// Claim vested tokens from a vesting wallet
+    /// Only the wallet owner can claim tokens, and only claimable amounts
+    public entry fun claim_vested_tokens(
+        wallet: &mut VestingWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Verify sender is the wallet owner
+        assert!(wallet.owner == sender, ENotVestingWalletOwner);
+
+        let claimable_amount = calculate_claimable(wallet, clock);
+        
+        // Only proceed if there are tokens to claim
+        if (claimable_amount > 0) {
+            // Update claimed amount
+            wallet.claimed_amount = wallet.claimed_amount + claimable_amount;
+            
+            // Create coin from the claimable balance and transfer to owner
+            let claimed_coin = coin::from_balance<MYS>(
+                balance::split(&mut wallet.balance, claimable_amount),
+                ctx
+            );
+            
+            let wallet_id = object::uid_to_address(&wallet.id);
+            let remaining_balance = balance::value(&wallet.balance);
+            
+            // Emit claim event
+            event::emit(TokensClaimedEvent {
+                wallet_id,
+                owner: sender,
+                claimed_amount: claimable_amount,
+                remaining_balance,
+                claimed_at: clock::timestamp_ms(clock),
+            });
+            
+            // Transfer claimed tokens to the owner
+            transfer::public_transfer(claimed_coin, sender);
+        };
+    }
+
+    /// Calculate how many tokens can be claimed from a vesting wallet at the current time
+    public fun claimable(wallet: &VestingWallet, clock: &Clock): u64 {
+        calculate_claimable(wallet, clock)
+    }
+
+    /// Internal function to calculate claimable amount
+    fun calculate_claimable(wallet: &VestingWallet, clock: &Clock): u64 {
+        let current_time = clock::timestamp_ms(clock);
+        
+        // If vesting hasn't started yet, nothing is claimable
+        if (current_time < wallet.start_time) {
+            return 0
+        };
+        
+        // If vesting period is complete, all remaining balance is claimable
+        if (current_time >= wallet.start_time + wallet.duration) {
+            return balance::value(&wallet.balance)
+        };
+        
+        // Calculate progress as a percentage (0 to CURVE_PRECISION)
+        let elapsed_time = current_time - wallet.start_time;
+        let progress = ((elapsed_time as u128) * (CURVE_PRECISION as u128)) / (wallet.duration as u128);
+        
+        // Apply curve based on curve_factor
+        let curved_progress = if (wallet.curve_factor == CURVE_PRECISION) {
+            // Linear vesting (curve_factor = 1000)
+            progress
+        } else if (wallet.curve_factor > CURVE_PRECISION) {
+            // Exponential curve - more tokens at the end
+            // Use simplified exponential: progress^2 scaled by curve_factor
+            let steepness = wallet.curve_factor - CURVE_PRECISION; // How much above linear
+            let quadratic = (progress * progress) / (CURVE_PRECISION as u128);
+            let linear_part = (progress * (CURVE_PRECISION as u128)) / (CURVE_PRECISION as u128);
+            
+            // Blend between linear and quadratic based on steepness
+            (linear_part * (CURVE_PRECISION as u128) + quadratic * (steepness as u128)) / (CURVE_PRECISION as u128)
+        } else {
+            // Logarithmic curve - more tokens at the start
+            // Use simplified square root approximation for early release
+            let steepness = CURVE_PRECISION - wallet.curve_factor; // How much below linear
+            let sqrt_approx = sqrt_approximation(progress * (CURVE_PRECISION as u128)) * (CURVE_PRECISION as u128) / (CURVE_PRECISION as u128);
+            let linear_part = progress;
+            
+            // Blend between square root and linear based on steepness
+            (sqrt_approx * (steepness as u128) + linear_part * (CURVE_PRECISION as u128)) / (CURVE_PRECISION as u128)
+        };
+        
+        // Convert back to total claimable amount
+        let total_claimable = ((wallet.total_amount as u128) * curved_progress) / (CURVE_PRECISION as u128);
+        
+        // Subtract already claimed amount to get newly claimable amount
+        let newly_claimable = (total_claimable as u64) - wallet.claimed_amount;
+        
+        // Ensure we don't exceed the remaining balance
+        let remaining_balance = balance::value(&wallet.balance);
+        if (newly_claimable > remaining_balance) {
+            remaining_balance
+        } else {
+            newly_claimable
+        }
+    }
+
+    /// Simple square root approximation using Newton's method
+    fun sqrt_approximation(n: u128): u128 {
+        if (n == 0) return 0;
+        if (n == 1) return 1;
+        
+        let mut x = n;
+        let mut y = (x + 1) / 2;
+        
+        // Newton's method with limited iterations
+        let mut i = 0;
+        while (y < x && i < 10) {
+            x = y;
+            y = (x + n / x) / 2;
+            i = i + 1;
+        };
+        
+        x
+    }
+
+    /// Delete an empty vesting wallet
+    /// Can only be called when the wallet balance is zero
+    public entry fun delete_vesting_wallet(wallet: VestingWallet, ctx: &mut TxContext) {
+        let sender = tx_context::sender(ctx);
+        
+        // Verify sender is the wallet owner
+        assert!(wallet.owner == sender, ENotVestingWalletOwner);
+        
+        let VestingWallet { 
+            id, 
+            balance, 
+            owner: _, 
+            start_time: _, 
+            claimed_amount: _, 
+            duration: _, 
+            total_amount: _,
+            curve_factor: _
+        } = wallet;
+        
+        // Delete the wallet ID
+        object::delete(id);
+        
+        // Destroy the empty balance
+        balance::destroy_zero(balance);
+    }
+
+    // === Vesting Wallet Accessors ===
+
+    /// Get the remaining balance in a vesting wallet
+    public fun vesting_balance(wallet: &VestingWallet): u64 {
+        balance::value(&wallet.balance)
+    }
+
+    /// Get the owner of a vesting wallet
+    public fun vesting_owner(wallet: &VestingWallet): address {
+        wallet.owner
+    }
+
+    /// Get the start time of a vesting schedule
+    public fun vesting_start_time(wallet: &VestingWallet): u64 {
+        wallet.start_time
+    }
+
+    /// Get the duration of a vesting schedule
+    public fun vesting_duration(wallet: &VestingWallet): u64 {
+        wallet.duration
+    }
+
+    /// Get the total amount originally vested
+    public fun vesting_total_amount(wallet: &VestingWallet): u64 {
+        wallet.total_amount
+    }
+
+    /// Get the amount already claimed from a vesting wallet
+    public fun vesting_claimed_amount(wallet: &VestingWallet): u64 {
+        wallet.claimed_amount
+    }
+
+    /// Get the curve factor of a vesting wallet
+    public fun vesting_curve_factor(wallet: &VestingWallet): u64 {
+        wallet.curve_factor
+    }
+
 }

@@ -1,4 +1,5 @@
 // Copyright (c) Mysten Labs, Inc.
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Defines the `DenyList` type. The `DenyList` shared object is used to restrict access to
@@ -44,6 +45,7 @@ const RESERVED: vector<address> = vector[
     @0xF,
     @0x403,
     @0xDEE9,
+    @0xD880
 ];
 
 /// A shared object that stores the addresses that are blocked for a given core type.

@@ -1,129 +1,297 @@
 # MySocial Contracts
 
-This repository contains the smart contracts for the MySocial platform, a decentralized social network built on the MySocial blockchain.
+A comprehensive decentralized social network built on the MySocial blockchain featuring advanced content monetization, governance, and social interactions.
 
 ## Published Contract
 
 The contract is published on MySocial network with package ID:
 ```
-0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef
+0x000000000000000000000000000000000000000000000000000000000000d880
 ```
 
-## Key Components
+## Platform Overview
 
-The MySocial platform consists of several interconnected modules:
+MySocial is a feature-rich decentralized social platform that combines traditional social networking with blockchain-native features like token trading, content monetization, decentralized governance, and proof-of-creativity systems.
 
-1. **Profile** - Manages user profiles and identity
-2. **Name Service** - Handles username registration and management
-3. **Post** - Enables creating and sharing social content
-4. **Social Graph** - Manages connections between users (follow/unfollow)
-5. **Registry** - Provides standardized registry patterns for various components
+## Core Modules
 
-## Interacting with the Contract
+### 1. **Profile Management** (`profile.move`)
+- **User Identity**: Create and manage user profiles with display names, bios, profile pictures
+- **Username System**: Register unique usernames as NFTs with pricing tiers
+- **Social Connections**: Link social media accounts (Twitter, GitHub, Instagram, etc.)
+- **Profile Trading**: Buy/sell profiles with offers and automated fee distribution
+- **Badge System**: Platform-issued verification and achievement badges
+- **MyIP Integration**: Attach data monetization assets to profiles
+
+**Key Features:**
+- Profile ownership transfer
+- Minimum offer amounts for profile sales
+- Authorized service management
+- Comprehensive social media linking
+
+### 2. **Content Creation** (`post.move`)
+- **Post Types**: Standard posts, comments, reposts, quote reposts, predictions
+- **Rich Media**: Support for multiple media URLs, mentions, metadata
+- **Interaction Controls**: Granular permissions for comments, reactions, reposts, quotes, tips
+- **Prediction Markets**: Create prediction posts with betting and resolution
+- **Content Moderation**: Platform-level content flagging and removal
+- **Proof of Creativity Integration**: Automatic revenue redirection for derivative content
+
+**Advanced Features:**
+- Nested comment threads
+- Reaction system with emoji/text responses
+- Prediction betting with automatic payouts
+- Revenue splitting for reposts and comments
+
+### 3. **Proof of Creativity** (`proof_of_creativity.move`)
+- **Content Analysis**: Oracle-based similarity detection for originality verification
+- **PoC Badges**: Issue badges for original content
+- **Revenue Redirection**: Automatic revenue routing from derivative to original creators
+- **Community Disputes**: Vote-based system to challenge PoC decisions
+- **Cross-Module Integration**: Seamless integration with posts and token trading
+
+**Workflow:**
+1. Oracle analyzes content for originality
+2. Original content receives PoC badge
+3. Derivative content gets revenue redirection rules
+4. All tips/trading fees automatically split according to PoC analysis
+5. Community can dispute decisions through voting
+
+### 4. **Token Exchange** (`token_exchange.move`)
+- **Dual Token System**: Profile tokens and post tokens with different economics
+- **AMM Trading**: Quadratic pricing curve for token trading
+- **Pre-Launch Auctions**: Viral content can launch tokens through community auctions
+- **Automated PoC Integration**: Revenue redirection built into all trading functions
+- **Fee Distribution**: Multi-tier fee system (creator, platform, treasury)
+
+**Trading Features:**
+- Buy/sell tokens with slippage protection
+- Auction-based token launches for viral content
+- Maximum holding limits to prevent concentration
+- Dynamic pricing based on supply and demand
+
+### 5. **Social Graph** (`social_graph.move`)
+- **Follow System**: Decentralized follow/unfollow relationships
+- **Global Registry**: Shared social graph across all platforms
+- **Profile Integration**: Automatic follower/following count updates
+- **Privacy Controls**: Integration with blocking systems
+
+### 6. **Platform Management** (`platform.move`)
+- **Multi-Platform Support**: Multiple social platforms can use the same contracts
+- **Developer Tools**: Platform creation, moderation, user management
+- **Governance Integration**: Platforms can opt into DAO governance
+- **Treasury Management**: Platform-specific token treasuries
+- **Badge Issuance**: Platforms can issue verification badges to users
+
+**Platform Features:**
+- User join/leave functionality
+- Moderator management
+- Content blocking and approval
+- Token airdrops from platform treasuries
+
+### 7. **Subscription Services** (`subscription.move`)
+- **Profile Subscriptions**: Monthly subscription access to profile content
+- **Auto-Renewal**: Gas-optimized automatic subscription renewals
+- **Flexible Pricing**: Profile owners set their own subscription rates
+- **Access Control**: Integration with content gating systems
+
+### 8. **Data Monetization** (`my_ip.move`)
+- **Encrypted Content**: Sell access to encrypted data using Seal encryption
+- **Dual Pricing**: One-time purchases or subscription-based access
+- **Rich Metadata**: Comprehensive data categorization and discovery
+- **Access Management**: Granular control over who can access content
+- **Revenue Optimization**: Multiple monetization strategies per data asset
+
+**MyIP Features:**
+- Time-range data for analytics
+- Geographic and quality metadata
+- Subscription duration flexibility
+- Free access grants for promotion
+
+### 9. **Decentralized Governance** (`governance.move`)
+- **Multi-Registry System**: Separate governance for ecosystem, reputation, community notes
+- **Delegate Council**: Elected representatives for proposal review
+- **Community Voting**: Quadratic voting system for final decisions
+- **Anonymous Voting**: Privacy-preserving vote encryption
+- **Reward Distribution**: Token incentives for participation
+
+**Governance Process:**
+1. Submit proposals with token stake
+2. Delegate council reviews and approves for community voting
+3. Community votes with quadratic cost scaling
+4. Automatic reward distribution to winning voters
+5. Implementation tracking and verification
+
+### 10. **User Safety** (`block_list.move`)
+- **Granular Blocking**: Block users from seeing your content or interacting
+- **Platform-Level Blocks**: Platforms can block users from their ecosystem
+- **Cross-Module Integration**: Blocking affects all interactions (tips, comments, trading)
+
+### 11. **System Upgrades** (`upgrade.move`)
+- **Version Management**: Controlled upgrades across all modules
+- **Migration Support**: Automatic object migration to new versions
+- **Admin Controls**: Secure upgrade authorization system
+
+## Key Innovations
+
+### Integrated Revenue Redirection
+- **Seamless PoC Integration**: All revenue streams (tips, token trading fees) automatically redirect based on content originality
+- **Multi-Level Splitting**: Complex revenue sharing between original creators, derivative creators, platforms, and treasury
+- **Real-Time Analysis**: Oracle integration for immediate PoC decisions
+
+### Advanced Token Economics
+- **Viral Threshold Auctions**: Only viral content can launch tokens through community auctions
+- **Dynamic Pricing**: Quadratic curves prevent manipulation while enabling price discovery
+- **Cross-Module Integration**: Tokens seamlessly integrate with all platform features
+
+### Comprehensive Governance
+- **Specialized Registries**: Different governance systems for different types of decisions
+- **Delegate Democracy**: Hybrid system combining representative and direct democracy
+- **Economic Incentives**: Token rewards align voter incentives with platform health
+
+## Quick Start
 
 ### Prerequisites
-
 - [MySocial CLI](https://docs.mysocial.io/cli-install) installed
 - An account with MYS coins for gas and transactions
 
-### Basic Usage
+### Basic Setup
 
-#### 1. Create a Name Registry
-
-The first step is to create a shared name registry that stores all usernames:
-
+1. **Create a Profile**
 ```bash
-# Create and share name registry
-myso client call --package 0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef --module name_service --function create_and_share_registry --gas-budget 1000000000
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module profile --function create_profile \
+  --args "Your Name" "your_username" "Your bio" "https://example.com/profile.jpg" "https://example.com/cover.jpg" \
+  --gas-budget 1000000000
 ```
 
-Save the generated registry ID from the transaction output.
-
-#### 2. Create a Profile
-
-Create your profile with display name, bio, and profile picture URL:
-
+2. **Join a Platform**
 ```bash
-# Create profile
-myso client call --package 0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef --module profile --function create_profile --args "Your Name" "Your bio" "https://example.com/profile.jpg" --gas-budget 1000000000
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module platform --function join_platform \
+  --args [REGISTRY_ID] [PLATFORM_ID] \
+  --gas-budget 1000000000
 ```
 
-Save your profile ID from the transaction output.
-
-#### 3. Register a Username
-
-Register a username and assign it to your profile:
-
+3. **Create a Post**
 ```bash
-# Register and assign username
-myso client call --package 0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef --module name_service --function register_and_assign_username --args [REGISTRY_ID] [PROFILE_ID] "username" [COIN_OBJECT_ID] 1 [CLOCK_OBJECT_ID] --gas-budget 1000000000
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module post --function create_post \
+  --args [REGISTRY_ID] [PLATFORM_ID] [BLOCK_LIST_ID] [CONFIG_ID] "Hello MySocial!" \
+  --gas-budget 1000000000
 ```
 
-Replace:
-- `[REGISTRY_ID]` with the ID of the name registry
-- `[PROFILE_ID]` with your profile ID
-- `"username"` with your desired username
-- `[COIN_OBJECT_ID]` with an object ID of a MYS coin you own
-- `[CLOCK_OBJECT_ID]` with the system clock ID (usually `0x6`)
+### Advanced Features
 
-#### 4. Update Profile
-
-Update your profile information:
-
+**Create a Prediction Post:**
 ```bash
-# Update profile
-myso client call --package 0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef --module profile --function update_profile --args [PROFILE_ID] "New Name" "Updated bio" "https://example.com/new-profile.jpg" --gas-budget 1000000000
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module post --function create_prediction_post \
+  --args [CONFIG_ID] [ADMIN_CAP] [REGISTRY_ID] [PLATFORM_ID] [BLOCK_LIST_ID] \
+  "Who will win the game?" '["Team A", "Team B"]' \
+  --gas-budget 1000000000
 ```
 
-#### 5. Create a Post
-
-Create a social post:
-
+**Subscribe to a Profile:**
 ```bash
-# Create post (simplified example)
-myso client call --package 0xf16b6567d925341ab29edcf9e0dd743530f235083b2ac2603dbe6e37832eafef --module post --function create_post --args [PROFILE_ID] "Hello World!" "" "" --gas-budget 1000000000
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module subscription --function subscribe_to_profile \
+  --args [SERVICE_ID] [PAYMENT_COIN] true 3 [CLOCK_ID] \
+  --gas-budget 1000000000
 ```
 
-### Additional Resources
-
-For more complex functionality including social graph management, content monetization, and platform integrations, refer to the module source code and tests. The contract includes:
-
-- Profile and identity management
-- Username registration and NFT management
-- Social posting and content sharing
-- Reputation and token systems
-- Platform integration and monetization options
-
-## Quick Testing Script
-
-For quick testing, run the provided shell script:
-
+**Submit a Governance Proposal:**
 ```bash
-./interact_with_social_contract.sh
+myso client call --package 0x000000000000000000000000000000000000000000000000000000000000d880 \
+  --module governance --function submit_ecosystem_proposal \
+  --args [REGISTRY_ID] "Proposal Title" "Detailed description" [PAYMENT_COIN] \
+  --gas-budget 1000000000
 ```
 
-## Username Pricing
+## Economic Model
 
-Usernames are priced based on length:
-- Ultra short (2-4 chars): 1,000 MYS
-- Short (5-7 chars): 50 MYS
-- Medium (8-12 chars): 20 MYS  
-- Long (13+ chars): 10 MYS
+### Revenue Streams
+1. **Transaction Fees**: Trading, tipping, subscription fees
+2. **Platform Fees**: Content creation, platform services
+3. **Governance Fees**: Proposal submission, voting costs
+4. **Token Trading**: AMM fees and auction revenues
 
-## Development
+### Revenue Distribution
+- **Creators**: 60-80% of revenue (varies by activity)
+- **Original Creators**: Automatic redirection via PoC system
+- **Platforms**: 25% of transaction fees
+- **Ecosystem Treasury**: 25% of transaction fees
+- **Governance Participants**: Voting rewards and proposal stakes
 
-To build and test the contracts locally:
+## Technical Architecture
+
+### Modular Design
+- **Separation of Concerns**: Each module handles specific functionality
+- **Cross-Module Integration**: Seamless data sharing and function calls
+- **Upgrade Path**: Independent module upgrades without system downtime
+
+### Security Features
+- **Permission Systems**: Granular access controls throughout
+- **Economic Security**: Token staking for important actions
+- **Community Oversight**: Dispute resolution and governance checks
+
+### Scalability
+- **Efficient Data Structures**: Optimized storage and retrieval
+- **Event-Driven Architecture**: Off-chain indexing and caching
+- **Parallel Processing**: Independent module operations
+
+## Testing
+
+Run the comprehensive test suite:
 
 ```bash
 # Build the project
-cd /path/to/mys-social
 myso move build
 
-# Run tests
+# Run all tests
 myso move test
+
+# Run specific module tests
+myso move test --filter test_token_exchange
+myso move test --filter test_proof_of_creativity
+myso move test --filter test_governance
 ```
+
+## Integration Examples
+
+### Platform Integration
+Platforms can integrate MySocial contracts to add:
+- Decentralized user profiles and social graphs
+- Content monetization through tipping and subscriptions
+- Token trading for creator and platform tokens
+- Community governance for platform decisions
+- Proof-of-creativity revenue sharing
+
+### DApp Integration
+Applications can build on MySocial for:
+- Social login and identity
+- Content verification and originality checking
+- Micropayments and subscriptions
+- Community governance and voting
+- Data monetization infrastructure
+
+## Development
+
+### Building Locally
+```bash
+cd crates/mys-framework/packages/mys-social
+myso move build
+```
+
+### Publishing Updates
+```bash
+myso client publish --gas-budget 200000000000
+```
+
+### Upgrading Contracts
+The upgrade system allows for seamless contract updates while preserving user data and maintaining backward compatibility.
 
 ## License
 
-Copyright (c) MySocial, Inc.
+Copyright (c) The Social Proof Foundation, LLC.  
 SPDX-License-Identifier: Apache-2.0

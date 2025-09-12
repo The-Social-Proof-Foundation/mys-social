@@ -1,23 +1,30 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Governance module for the MySocial network
 /// Manages the decentralized governance system with delegate council and community assembly
 /// Implements proposal submission, voting, and execution processes
 
+#[allow(duplicate_alias, unused_use)]
 module social_contracts::governance {
-    use std::string::{String};
+    use std::string::{Self, String};
     
-    use mys::dynamic_field;
-    use mys::vec_set::{Self, VecSet};
-    use mys::event;
-    use mys::table::{Self, Table};
-    use mys::coin::{Self, Coin};
-    use mys::balance::{Self, Balance};
+    use mys::{
+        object::{Self, UID, ID},
+        tx_context::{Self, TxContext},
+        transfer,
+        dynamic_field,
+        vec_set::{Self, VecSet},
+        event,
+        table::{Self, Table},
+        coin::{Self, Coin},
+        balance::{Self, Balance}
+    };
     use mys::mys::MYS;
-    use mys::package::{Self, Publisher};
+
+    use seal::bf_hmac_encryption::{EncryptedObject, VerifiedDerivedKey, PublicKey, decrypt};
     
-    use social_contracts::upgrade;
+    use social_contracts::upgrade::{Self, UpgradeAdminCap};
     use social_contracts::profile;
 
     /// Error codes
@@ -37,11 +44,11 @@ module social_contracts::governance {
     const EInvalidRegistry: u64 = 15;
     const EAlreadyNominated: u64 = 16;
     const EWrongVersion: u64 = 17;
+    const EDelegateAnonNotAllowed: u64 = 18;
 
     /// Proposal type constants
     const PROPOSAL_TYPE_ECOSYSTEM: u8 = 0;
-    const PROPOSAL_TYPE_REPUTATION: u8 = 1;
-    const PROPOSAL_TYPE_COMMUNITY_NOTES: u8 = 2;
+    const PROPOSAL_TYPE_PROOF_OF_CREATIVITY: u8 = 1;
     const PROPOSAL_TYPE_PLATFORM: u8 = 3;
 
     /// Proposal status constants
@@ -60,11 +67,18 @@ module social_contracts::governance {
     const VOTED_AGAINST_FIELD: vector<u8> = b"voted_against";
     const VOTED_DELEGATES_LIST_FIELD: vector<u8> = b"voted_delegates_list";
     const DELEGATE_REASONS_FIELD: vector<u8> = b"delegate_reasons";
+    const ENCRYPTED_VOTES_FIELD: vector<u8> = b"encrypted_votes";
+    const ANON_VOTERS_FIELD: vector<u8> = b"anon_voters";
+
+    /// Admin capability for Governance system management
+    public struct GovernanceAdminCap has key, store {
+        id: UID,
+    }
 
     /// Governance registry that keeps track of all delegates and proposals
     public struct GovernanceDAO has key {
         id: UID,
-        /// Registry type identifier (ecosystem, reputation, community notes)
+        /// Registry type identifier (ecosystem, proof of creativity, platform)
         registry_type: u8,
         /// Configuration parameters
         delegate_count: u64,
@@ -115,7 +129,7 @@ module social_contracts::governance {
         id: UID,
         title: String,
         description: String,
-        proposal_type: u8,  // Ecosystem, Reputation, Community Notes
+        proposal_type: u8,  // Ecosystem, Proof of Creativity, Platform
         reference_id: Option<ID>,  // Optional reference to content/profile/post ID
         metadata_json: Option<String>, // Optional JSON metadata string
         submitter: address,
@@ -193,6 +207,14 @@ module social_contracts::governance {
         vote_cost: u64,
     }
 
+    /// Event emitted when an anonymous vote is submitted
+    public struct AnonymousVoteEvent has copy, drop {
+        proposal_id: ID,
+        voter: address,
+        vote_time: u64,
+        encrypted_vote_data: vector<u8>, // Raw encrypted vote data for indexer storage
+    }
+
     /// Event emitted when a proposal is approved by the delegate council
     public struct ProposalApprovedForVotingEvent has copy, drop {
         proposal_id: ID,
@@ -237,6 +259,14 @@ module social_contracts::governance {
         distribution_time: u64,
     }
 
+    /// Event emitted when vote decryption fails
+    public struct VoteDecryptionFailedEvent has copy, drop {
+        proposal_id: ID,
+        voter: address,
+        failure_reason: String,
+        timestamp: u64,
+    }
+
     /// Event emitted when a proposal is rescinded by its submitter
     public struct ProposalRescindedEvent has copy, drop {
         proposal_id: ID,
@@ -245,9 +275,10 @@ module social_contracts::governance {
         refund_amount: u64,
     }
 
-    /// Create and share separate governance registries for each proposal type
-    fun init(ctx: &mut TxContext) {
-        // Create Ecosystem Governance Registry
+    /// Bootstrap initialization function - creates the governance registries
+    /// This function has the same logic as init() but can be called by bootstrap
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
+        // Create MySocial Ecosystem Governance Registry
         let mut ecosystem_registry = GovernanceDAO {
             id: object::new(ctx),
             registry_type: PROPOSAL_TYPE_ECOSYSTEM,
@@ -272,44 +303,19 @@ module social_contracts::governance {
             version: upgrade::current_version(),
         };
         
-        // Create Reputation Governance Registry
-        let mut reputation_registry = GovernanceDAO {
+        // Create Proof of Creativity Governance Registry
+        let mut proof_of_creativity_registry = GovernanceDAO {
             id: object::new(ctx),
-            registry_type: PROPOSAL_TYPE_REPUTATION,
-            // Configuration parameters specific to reputation governance
-            delegate_count: 5, // Smaller council for reputation disputes
-            delegate_term_epochs: 60, // 2 months for reputation delegates
-            proposal_submission_cost: 50_000_000, // 50 MYS for reputation disputes
-            min_on_chain_age_days: 7, // 1 week minimum for reputation voting
-            max_votes_per_user: 5, // Up to 5 votes per user
-            quadratic_base_cost: 5_000_000, // 5 MYS per additional vote
-            voting_period_epochs: 3, // 3 epochs for reputation votes
-            quorum_votes: 15, // 15 votes required for reputation proposals
-            // Tables
-            delegates: table::new<address, Delegate>(ctx),
-            proposals: table::new<ID, Proposal>(ctx),
-            proposals_by_status: table::new<u8, vector<ID>>(ctx),
-            treasury: balance::zero(),
-            nominated_delegates: table::new<address, NominatedDelegate>(ctx),
-            delegate_addresses: vec_set::empty<address>(),
-            nominee_addresses: vec_set::empty<address>(),
-            voters: table::new<address, Table<address, bool>>(ctx),
-            version: upgrade::current_version(),
-        };
-        
-        // Create Community Notes Governance Registry
-        let mut community_notes_registry = GovernanceDAO {
-            id: object::new(ctx),
-            registry_type: PROPOSAL_TYPE_COMMUNITY_NOTES,
-            // Configuration parameters specific to community notes governance
-            delegate_count: 7, // Medium council for community notes
-            delegate_term_epochs: 30, // 1 month for community notes delegates
-            proposal_submission_cost: 25_000_000, // 25 MYS for community notes
-            min_on_chain_age_days: 3, // 3 days minimum for community notes voting
+            registry_type: PROPOSAL_TYPE_PROOF_OF_CREATIVITY,
+            // Configuration parameters specific to proof of creativity governance
+            delegate_count: 2, // Smaller council for proof of creativity
+            delegate_term_epochs: 180, // 3 months for proof of creativity delegates
+            proposal_submission_cost: 25_000_000, // 25 MYS for proof of creativity
+            min_on_chain_age_days: 1, // 1 day minimum for proof of creativity voting
             max_votes_per_user: 3, // Up to 3 votes per user
             quadratic_base_cost: 2_500_000, // 2.5 MYS per additional vote
-            voting_period_epochs: 1, // 1 epoch for community notes votes
-            quorum_votes: 10, // 10 votes required for community notes proposals
+            voting_period_epochs: 1, // 1 epoch for proof of creativity votes
+            quorum_votes: 10, // 10 votes required for proof of creativity proposals
             // Tables
             delegates: table::new<address, Delegate>(ctx),
             proposals: table::new<ID, Proposal>(ctx),
@@ -324,13 +330,11 @@ module social_contracts::governance {
         
         // Initialize each registry's status tables
         initialize_registry_tables(&mut ecosystem_registry, ctx);
-        initialize_registry_tables(&mut reputation_registry, ctx);
-        initialize_registry_tables(&mut community_notes_registry, ctx);
+        initialize_registry_tables(&mut proof_of_creativity_registry, ctx);
         
         // Share the registry objects
         transfer::share_object(ecosystem_registry);
-        transfer::share_object(reputation_registry);
-        transfer::share_object(community_notes_registry);
+        transfer::share_object(proof_of_creativity_registry);
     }
 
     fun initialize_registry_tables(registry: &mut GovernanceDAO, _ctx: &mut TxContext) {
@@ -344,10 +348,10 @@ module social_contracts::governance {
     }
 
     /// Update governance parameters
-    /// Can only be called by the contract owner with a valid publisher
+    /// Can only be called by the governance admin
     public entry fun update_governance_parameters(
         registry: &mut GovernanceDAO,
-        publisher: &Publisher,
+        _: &GovernanceAdminCap,
         delegate_count: u64,
         delegate_term_epochs: u64,
         proposal_submission_cost: u64,
@@ -358,8 +362,7 @@ module social_contracts::governance {
         quorum_votes: u64,
         _ctx: &mut TxContext
     ) {
-        // Verify caller has a valid publisher for this module
-        assert!(package::from_module<GovernanceDAO>(publisher), EUnauthorized);
+        // Admin capability verification is handled by type system
         // Ensure parameters are sensible
         assert!(delegate_count > 1, EInvalidParameter);
         assert!(delegate_term_epochs > 0, EInvalidParameter);
@@ -804,7 +807,7 @@ module social_contracts::governance {
     }
 
     /// Universal function to submit any type of proposal
-    /// Handles all proposal types: ecosystem, reputation disputes, and community notes
+    /// Handles proposal types: ecosystem and proof of creativity
     public entry fun submit_proposal(
         registry: &mut GovernanceDAO,
         proposal_type: u8,
@@ -826,19 +829,20 @@ module social_contracts::governance {
         let actual_reference_id = if (proposal_type == PROPOSAL_TYPE_ECOSYSTEM) {
             // Ecosystem proposals use reference_id as provided
             reference_id
-        } else if (option::is_some(&reference_id)) {
-            // If reference_id is explicitly provided, use it for any proposal type
-            reference_id
-        } else if (option::is_some(&disputed_id)) {
-            // For disputes (reputation or community notes), use disputed_id as the reference if no reference provided
-            disputed_id
-        } else {
-            // For disputes, a reference or disputed ID should be provided
-            if (proposal_type != PROPOSAL_TYPE_ECOSYSTEM) {
-                // Reputation and community notes should have a reference
+        } else if (proposal_type == PROPOSAL_TYPE_PROOF_OF_CREATIVITY) {
+            // Proof of creativity proposals should have either reference_id or disputed_id
+            if (option::is_some(&reference_id)) {
+                reference_id
+            } else if (option::is_some(&disputed_id)) {
+                disputed_id
+            } else {
+                // Proof of creativity proposals should reference creative content
                 assert!(false, EInvalidParameter);
-            };
-            option::none<ID>()
+                option::none<ID>()
+            }
+        } else {
+            // For other proposal types (like platform), use reference_id if provided
+            reference_id
         };
         
         // Submit the proposal using the internal implementation
@@ -878,48 +882,23 @@ module social_contracts::governance {
         );
     }
 
-    /// Submit a special proposal for reputation dispute
-    public entry fun submit_reputation_dispute(
+    /// Submit a proof of creativity proposal
+    public entry fun submit_proof_of_creativity_proposal(
         registry: &mut GovernanceDAO,
         title: String,
         description: String,
-        disputed_profile_id: ID,
-        reference_id: Option<ID>,
+        creative_content_id: ID,
         metadata_json: Option<String>,
         coin: &mut Coin<MYS>,
         ctx: &mut TxContext
     ) {
         submit_proposal(
             registry,
-            PROPOSAL_TYPE_REPUTATION,
+            PROPOSAL_TYPE_PROOF_OF_CREATIVITY,
             title,
             description,
-            option::some(disputed_profile_id),
-            reference_id,
-            metadata_json,
-            coin,
-            ctx
-        );
-    }
-
-    /// Submit a special proposal for community note
-    public entry fun submit_community_note(
-        registry: &mut GovernanceDAO,
-        title: String,
-        description: String,
-        disputed_content_id: ID,
-        reference_id: Option<ID>,
-        metadata_json: Option<String>,
-        coin: &mut Coin<MYS>,
-        ctx: &mut TxContext
-    ) {
-        submit_proposal(
-            registry,
-            PROPOSAL_TYPE_COMMUNITY_NOTES,
-            title,
-            description,
-            option::some(disputed_content_id),
-            reference_id,
+            option::none<ID>(), // No disputed ID for proof of creativity
+            option::some(creative_content_id), // Reference to creative content
             metadata_json,
             coin,
             ctx
@@ -1329,6 +1308,53 @@ module social_contracts::governance {
         });
     }
 
+    /// Submit an anonymous encrypted vote on a proposal
+    public fun community_vote_anonymous(
+        registry: &mut GovernanceDAO,
+        proposal_id: ID,
+        encrypted_vote: EncryptedObject,
+        ctx: &mut TxContext
+    ) {
+        let caller = tx_context::sender(ctx);
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        let current_epoch = tx_context::epoch(ctx);
+
+        assert!(table::contains(&registry.proposals, proposal_id), EProposalNotFound);
+        let proposal = table::borrow_mut(&mut registry.proposals, proposal_id);
+        assert!(proposal.status == STATUS_COMMUNITY_VOTING, ENotVotingPhase);
+        assert!(current_epoch <= proposal.voting_end_time, EVotingPeriodEnded);
+        assert!(!table::contains(&registry.delegates, caller), EDelegateAnonNotAllowed);
+
+        let voted_community: &mut VecSet<address> = dynamic_field::borrow_mut(&mut proposal.id, VOTED_COMMUNITY_FIELD);
+        assert!(!vec_set::contains(voted_community, &caller), EAlreadyVoted);
+        vec_set::insert(voted_community, caller);
+
+        if (!dynamic_field::exists_(&proposal.id, ENCRYPTED_VOTES_FIELD)) {
+            let tbl = table::new<address, EncryptedObject>(ctx);
+            dynamic_field::add(&mut proposal.id, ENCRYPTED_VOTES_FIELD, tbl);
+        };
+        let enc_tbl: &mut Table<address, EncryptedObject> = dynamic_field::borrow_mut(&mut proposal.id, ENCRYPTED_VOTES_FIELD);
+        table::add(enc_tbl, caller, encrypted_vote);
+
+        if (!dynamic_field::exists_(&proposal.id, ANON_VOTERS_FIELD)) {
+            let set = vec_set::empty<address>();
+            dynamic_field::add(&mut proposal.id, ANON_VOTERS_FIELD, set);
+        };
+        let anon_set: &mut VecSet<address> = dynamic_field::borrow_mut(&mut proposal.id, ANON_VOTERS_FIELD);
+        vec_set::insert(anon_set, caller);
+
+        // Serialize the entire EncryptedObject for indexer storage
+        let mut serialized_vote = vector::empty<u8>();
+        serialized_vote.append(*encrypted_vote.blob());
+        
+        event::emit(AnonymousVoteEvent {
+            proposal_id,
+            voter: caller,
+            vote_time: current_time,
+            encrypted_vote_data: serialized_vote, // Emit encrypted blob for indexer
+        });
+    }
+
     /// Finalize a proposal after the voting period ends
     public entry fun finalize_proposal(
         registry: &mut GovernanceDAO,
@@ -1457,6 +1483,124 @@ module social_contracts::governance {
                 balance::destroy_zero(balance::withdraw_all(&mut proposal.reward_pool));
             };
         }
+    }
+
+    /// Finalize a proposal with anonymous votes by decrypting them first
+    public fun finalize_proposal_anonymous(
+        registry: &mut GovernanceDAO,
+        proposal_id: ID,
+        keys: &vector<VerifiedDerivedKey>,
+        public_keys: &vector<PublicKey>,
+        ctx: &mut TxContext
+    ) {
+        let current_epoch = tx_context::epoch(ctx);
+        assert!(table::contains(&registry.proposals, proposal_id), EProposalNotFound);
+
+        // First, collect all the decrypted votes
+        let mut votes_for = vector::empty<address>();
+        let mut votes_against = vector::empty<address>();
+        let mut invalid_votes = vector::empty<address>(); // Track invalid votes
+
+        {
+            let proposal = table::borrow_mut(&mut registry.proposals, proposal_id);
+            assert!(proposal.status == STATUS_COMMUNITY_VOTING, EInvalidProposalStatus);
+            assert!(current_epoch > proposal.voting_end_time, EVotingPeriodNotEnded);
+
+            if (dynamic_field::exists_(&proposal.id, ENCRYPTED_VOTES_FIELD)) {
+                let votes_tbl: &Table<address, EncryptedObject> = dynamic_field::borrow(&proposal.id, ENCRYPTED_VOTES_FIELD);
+                let anon_set: &VecSet<address> = dynamic_field::borrow(&proposal.id, ANON_VOTERS_FIELD);
+                let voters_vec = vec_set::into_keys(*anon_set);
+                let mut i = 0;
+                let len = vector::length(&voters_vec);
+                
+                // Decrypt all votes and collect results with comprehensive error handling
+                while (i < len) {
+                    let addr = *vector::borrow(&voters_vec, i);
+                    let enc = table::borrow(votes_tbl, addr);
+                    let dec = decrypt(enc, keys, public_keys);
+                    
+                    if (option::is_some(&dec)) {
+                        let b = option::borrow(&dec);
+                        // Validate vote format: must be exactly 1 byte with value 0 or 1
+                        if (vector::length(b) == 1) {
+                            let vote_value = *vector::borrow(b, 0);
+                            if (vote_value == 1) {
+                                vector::push_back(&mut votes_for, addr);
+                            } else if (vote_value == 0) {
+                                vector::push_back(&mut votes_against, addr);
+                            } else {
+                                // Invalid vote value (not 0 or 1) - possible attack
+                                vector::push_back(&mut invalid_votes, addr);
+                                event::emit(VoteDecryptionFailedEvent {
+                                    proposal_id,
+                                    voter: addr,
+                                    failure_reason: string::utf8(b"Invalid vote value - not 0 or 1"),
+                                    timestamp: tx_context::epoch_timestamp_ms(ctx),
+                                });
+                            }
+                        } else {
+                            // Invalid vote format (wrong length) - possible corruption
+                            vector::push_back(&mut invalid_votes, addr);
+                            event::emit(VoteDecryptionFailedEvent {
+                                proposal_id,
+                                voter: addr,
+                                failure_reason: string::utf8(b"Invalid vote format - wrong byte length"),
+                                timestamp: tx_context::epoch_timestamp_ms(ctx),
+                            });
+                        }
+                    } else {
+                        // Failed to decrypt - could be malicious, corrupted, or wrong keys
+                        vector::push_back(&mut invalid_votes, addr);
+                        event::emit(VoteDecryptionFailedEvent {
+                            proposal_id,
+                            voter: addr,
+                            failure_reason: string::utf8(b"Decryption failed - invalid keys or corrupted data"),
+                            timestamp: tx_context::epoch_timestamp_ms(ctx),
+                        });
+                    };
+                    i = i + 1;
+                };
+                vector::destroy_empty(voters_vec);
+            };
+        };
+
+        // Log invalid votes for transparency but don't fail the entire process
+        // In production, you might want to emit events for invalid votes
+        vector::destroy_empty(invalid_votes);
+
+        // Now apply all the valid votes
+        {
+            let proposal = table::borrow_mut(&mut registry.proposals, proposal_id);
+            
+            // Process votes for
+            let mut i = 0;
+            let len = vector::length(&votes_for);
+            while (i < len) {
+                let addr = *vector::borrow(&votes_for, i);
+                proposal.community_votes_for = proposal.community_votes_for + 1;
+                let voted_for: &mut VecSet<address> = dynamic_field::borrow_mut(&mut proposal.id, VOTED_FOR_FIELD);
+                vec_set::insert(voted_for, addr);
+                i = i + 1;
+            };
+            
+            // Process votes against
+            let mut i = 0;
+            let len = vector::length(&votes_against);
+            while (i < len) {
+                let addr = *vector::borrow(&votes_against, i);
+                proposal.community_votes_against = proposal.community_votes_against + 1;
+                let voted_against: &mut VecSet<address> = dynamic_field::borrow_mut(&mut proposal.id, VOTED_AGAINST_FIELD);
+                vec_set::insert(voted_against, addr);
+                i = i + 1;
+            };
+        };
+
+        // Clean up temporary vectors
+        vector::destroy_empty(votes_for);
+        vector::destroy_empty(votes_against);
+
+        // All encrypted votes processed
+        finalize_proposal(registry, proposal_id, ctx);
     }
 
     /// Distribute rewards to winning voters
@@ -1803,5 +1947,13 @@ module social_contracts::governance {
         // Version-specific migrations would go here when needed
         
         registry.version = latest_version;
+    }
+
+    /// Create a GovernanceAdminCap for bootstrap (package visibility only)
+    /// This function is only callable by other modules in the same package
+    public(package) fun create_governance_admin_cap(ctx: &mut TxContext): GovernanceAdminCap {
+        GovernanceAdminCap {
+            id: object::new(ctx)
+        }
     }
 }

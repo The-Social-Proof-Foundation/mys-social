@@ -1,15 +1,21 @@
-// Copyright (c) The Social Proof Foundation LLC
+// Copyright (c) The Social Proof Foundation, LLC.
 // SPDX-License-Identifier: Apache-2.0
 
 /// Block list module for the MySocial network
 /// Manages user blocking between wallet addresses
 
+#[allow(duplicate_alias, unused_use)]
 module social_contracts::block_list {
-    use mys::event;
-    use mys::table::{Self, Table};
-    use mys::vec_set::{Self, VecSet};
-    use mys::dynamic_field;
-    use std::string;
+    use mys::{
+        object::{Self, UID, ID},
+        tx_context::{Self, TxContext},
+        transfer,
+        event,
+        table::{Self, Table},
+        vec_set::{Self, VecSet},
+        dynamic_field
+    };
+    use std::{string, option, vector};
     
     use social_contracts::upgrade::{Self, UpgradeAdminCap};
     
@@ -24,7 +30,7 @@ module social_contracts::block_list {
 
     /// Block list for a user's wallet
     public struct BlockList has key {
-        id: object::UID,
+        id: UID,
         /// The wallet address this block list belongs to
         owner: address,
         /// Version for upgrades
@@ -33,7 +39,7 @@ module social_contracts::block_list {
     
     /// Registry to track all block lists
     public struct BlockListRegistry has key {
-        id: object::UID,
+        id: UID,
         /// Table mapping wallet addresses to block list IDs
         wallet_block_lists: Table<address, address>,
         /// Version for upgrades
@@ -63,7 +69,7 @@ module social_contracts::block_list {
     }
 
     /// Create a new block list
-    public fun create_block_list(owner: address, ctx: &mut tx_context::TxContext): BlockList {
+    public fun create_block_list(owner: address, ctx: &mut TxContext): BlockList {
         BlockList {
             id: object::new(ctx),
             owner,
@@ -73,7 +79,7 @@ module social_contracts::block_list {
 
     /// Create a new block list for the sender
     /// This is an explicit operation to create a block list, even if not blocking anyone yet
-    public entry fun create_block_list_for_sender(registry: &mut BlockListRegistry, ctx: &mut tx_context::TxContext) {
+    public entry fun create_block_list_for_sender(registry: &mut BlockListRegistry, ctx: &mut TxContext) {
         let sender = tx_context::sender(ctx);
         
         // Check if a block list already exists for the sender
@@ -100,9 +106,9 @@ module social_contracts::block_list {
         // Return the block list to the caller
         transfer::transfer(block_list, sender);
     }
-
-    /// Module initializer to create the block list registry
-    fun init(ctx: &mut tx_context::TxContext) {
+    
+    /// Bootstrap initialization function - creates the block list registry
+    public(package) fun bootstrap_init(ctx: &mut TxContext) {
         let registry = BlockListRegistry {
             id: object::new(ctx),
             wallet_block_lists: table::new(ctx),
@@ -115,8 +121,8 @@ module social_contracts::block_list {
     
     /// Test-only initializer for the block list registry
     #[test_only]
-    public fun test_init(ctx: &mut tx_context::TxContext) {
-        init(ctx)
+    public fun test_init(ctx: &mut TxContext) {
+        bootstrap_init(ctx)
     }
     
     /// Generate a unique key for storing a user's blocked wallets
@@ -132,7 +138,7 @@ module social_contracts::block_list {
     public entry fun block_wallet(
         registry: &mut BlockListRegistry,
         blocked_wallet_address: address,
-        ctx: &mut tx_context::TxContext
+        ctx: &mut TxContext
     ) {
         // Get the sender address (wallet address of the blocker)
         let sender = tx_context::sender(ctx);
@@ -200,7 +206,7 @@ module social_contracts::block_list {
     public entry fun unblock_wallet(
         registry: &mut BlockListRegistry,
         blocked_wallet_address: address,
-        ctx: &mut tx_context::TxContext
+        ctx: &mut TxContext
     ) {
         // Get the sender address (wallet address of the blocker)
         let sender = tx_context::sender(ctx);
@@ -338,7 +344,7 @@ module social_contracts::block_list {
     public entry fun migrate_block_list(
         block_list: &mut BlockList,
         _: &UpgradeAdminCap,
-        ctx: &mut tx_context::TxContext
+        ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
         
@@ -365,7 +371,7 @@ module social_contracts::block_list {
     public entry fun migrate_block_list_registry(
         registry: &mut BlockListRegistry,
         _: &UpgradeAdminCap,
-        ctx: &mut tx_context::TxContext
+        ctx: &mut TxContext
     ) {
         let current_version = upgrade::current_version();
         
