@@ -106,7 +106,6 @@ module social_contracts::social_proof_of_truth_tests {
                 &admin_cap,
                 &mut cfg,
                 true, // enable
-                0,    // amm_split_bps 0% to avoid AMM path in tests
                 7000, // confidence_threshold
                 0,    // resolution_window_epochs (immediate)
                 0,    // max_resolution_window_epochs (immediate)
@@ -127,7 +126,7 @@ module social_contracts::social_proof_of_truth_tests {
     }
 
     #[test]
-    fun test_spot_auto_init_bet_and_resolve_yes() {
+    fun test_spot_bet_and_resolve_yes() {
         let mut scen = setup_env();
 
         // Configure SPoT for instant resolve
@@ -135,7 +134,7 @@ module social_contracts::social_proof_of_truth_tests {
         {
             let admin_cap = test_scenario::take_from_sender<spot::SpotAdminCap>(&scen);
             let mut cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::update_spot_config(&admin_cap, &mut cfg, true, 0, 0, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
+            spot::update_spot_config(&admin_cap, &mut cfg, true, 0, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
             test_scenario::return_to_sender(&scen, admin_cap);
             test_scenario::return_shared(cfg);
         };
@@ -157,43 +156,30 @@ module social_contracts::social_proof_of_truth_tests {
             test_scenario::return_shared(p);
         };
 
-        // User1 places bet; auto-init SPT pool and splits payment
+        // User1 places bet
         test_scenario::next_tx(&mut scen, USER1);
         {
             let mut spot_rec = test_scenario::take_shared<spot::SpotRecord>(&scen);
-            let mut spt_reg = test_scenario::take_shared<spt::TokenRegistry>(&scen);
-            let mut spt_cfg = test_scenario::take_shared<spt::SocialProofTokensConfig>(&scen);
-            let mut platform = test_scenario::take_from_sender<Platform>(&scen);
-            let bl = test_scenario::take_shared<BlockListRegistry>(&scen);
-
             let pay = coin::mint_for_testing<MYS>(1000 * SCALING, test_scenario::ctx(&mut scen));
             let post_ref = test_scenario::take_shared<Post>(&scen);
-
             let spot_cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::place_spot_bet_auto_init(
+            
+            spot::place_spot_bet(
                 &spot_cfg,
-                &mut spt_reg,
-                &mut spt_cfg,
                 &mut spot_rec,
                 &post_ref,
-                &mut platform,
-                &bl,
                 pay,
                 true, // YES
                 1000 * SCALING,
                 test_scenario::ctx(&mut scen)
             );
-            test_scenario::return_shared(spot_cfg);
 
             // Assertions on record via getters
-            assert!(spot::get_total_yes_escrow(&spot_rec) > 0, 1);
+            assert!(spot::get_total_yes_escrow(&spot_rec) == 1000 * SCALING, 1);
             assert!(spot::get_bets_len(&spot_rec) == 1, 2);
 
             test_scenario::return_shared(spot_rec);
-            test_scenario::return_shared(spt_reg);
-            test_scenario::return_shared(spt_cfg);
-            test_scenario::return_to_sender(&scen, platform);
-            test_scenario::return_shared(bl);
+            test_scenario::return_shared(spot_cfg);
             test_scenario::return_shared(post_ref);
         };
 
@@ -223,7 +209,7 @@ module social_contracts::social_proof_of_truth_tests {
         {
             let admin_cap = test_scenario::take_from_sender<spot::SpotAdminCap>(&scen);
             let mut cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::update_spot_config(&admin_cap, &mut cfg, true, 0, 9000, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
+            spot::update_spot_config(&admin_cap, &mut cfg, true, 9000, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
             test_scenario::return_to_sender(&scen, admin_cap);
             test_scenario::return_shared(cfg);
         };
@@ -241,37 +227,22 @@ module social_contracts::social_proof_of_truth_tests {
             test_scenario::return_shared(p);
         };
 
-        // Place bet via mock pool with USER1 (owns the platform)
+        // Place bet with USER1
         test_scenario::next_tx(&mut scen, USER1);
         {
             let mut rec = test_scenario::take_shared<spot::SpotRecord>(&scen);
-            let spt_reg = test_scenario::take_shared<spt::TokenRegistry>(&scen);
-            let spt_cfg = test_scenario::take_shared<spt::SocialProofTokensConfig>(&scen);
-            let mut platform = test_scenario::take_from_sender<Platform>(&scen);
-            let bl = test_scenario::take_shared<BlockListRegistry>(&scen);
             let post_ref = test_scenario::take_shared<Post>(&scen);
-
-            // Create a mock pool aligned to post
-            let info = spt::create_mock_token_info(@0x0, 2, CREATOR, post::get_id_address(&post_ref), string::utf8(b"PPOST"), string::utf8(b"Post Token"), 1, 100, 100, 0);
-            let mut pool = spt::create_mock_token_pool(info, test_scenario::ctx(&mut scen));
-
             let pay = coin::mint_for_testing<MYS>(500 * SCALING, test_scenario::ctx(&mut scen));
             let spot_cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::place_spot_bet_with_pool(&spot_cfg, &spt_reg, &spt_cfg, &mut rec, &post_ref, &mut pool, &mut platform, &bl, pay, false, 500 * SCALING, test_scenario::ctx(&mut scen));
+            
+            spot::place_spot_bet(&spot_cfg, &mut rec, &post_ref, pay, false, 500 * SCALING, test_scenario::ctx(&mut scen));
 
             // Check state updated via getters
-            assert!(spot::get_total_no_escrow(&rec) > 0, 1);
+            assert!(spot::get_total_no_escrow(&rec) == 500 * SCALING, 1);
             assert!(spot::get_bets_len(&rec) == 1, 2);
-
-            // Consume the pool by transferring it to USER1 to avoid drop error
-            mys::transfer::public_transfer(pool, USER1);
 
             test_scenario::return_shared(rec);
             test_scenario::return_shared(spot_cfg);
-            test_scenario::return_shared(spt_reg);
-            test_scenario::return_shared(spt_cfg);
-            test_scenario::return_to_sender(&scen, platform);
-            test_scenario::return_shared(bl);
             test_scenario::return_shared(post_ref);
         };
 
@@ -313,7 +284,7 @@ module social_contracts::social_proof_of_truth_tests {
         {
             let admin_cap = test_scenario::take_from_sender<spot::SpotAdminCap>(&scen);
             let mut cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::update_spot_config(&admin_cap, &mut cfg, true, 0, 7000, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
+            spot::update_spot_config(&admin_cap, &mut cfg, true, 7000, 0, 0, 0, 0, 5000, ADMIN, ADMIN, ADMIN, 0, test_scenario::ctx(&mut scen));
             test_scenario::return_to_sender(&scen, admin_cap);
             test_scenario::return_shared(cfg);
         };
@@ -331,32 +302,19 @@ module social_contracts::social_proof_of_truth_tests {
             test_scenario::return_shared(p);
         };
 
-        // Place a bet via mock pool (so we can call with_pool)
+        // Place a bet
         test_scenario::next_tx(&mut scen, USER1);
         {
             let mut rec = test_scenario::take_shared<spot::SpotRecord>(&scen);
-            let spt_reg = test_scenario::take_shared<spt::TokenRegistry>(&scen);
-            let spt_cfg = test_scenario::take_shared<spt::SocialProofTokensConfig>(&scen);
-            let mut platform = test_scenario::take_from_sender<Platform>(&scen);
-            let bl = test_scenario::take_shared<BlockListRegistry>(&scen);
             let post_ref = test_scenario::take_shared<Post>(&scen);
-
-            let info = spt::create_mock_token_info(@0x0, 2, CREATOR, post::get_id_address(&post_ref), string::utf8(b"PPOST"), string::utf8(b"Post Token"), 1, 100, 100, 0);
-            let mut pool = spt::create_mock_token_pool(info, test_scenario::ctx(&mut scen));
-
             let pay = coin::mint_for_testing<MYS>(250 * SCALING, test_scenario::ctx(&mut scen));
             let spot_cfg = test_scenario::take_shared<spot::SpotConfig>(&scen);
-            spot::place_spot_bet_with_pool(&spot_cfg, &spt_reg, &spt_cfg, &mut rec, &post_ref, &mut pool, &mut platform, &bl, pay, true, 250 * SCALING, test_scenario::ctx(&mut scen));
+            
+            spot::place_spot_bet(&spot_cfg, &mut rec, &post_ref, pay, true, 250 * SCALING, test_scenario::ctx(&mut scen));
 
-            assert!(spot::get_total_yes_escrow(&rec) > 0, 1);
-            // Consume the pool by transferring it to USER1
-            mys::transfer::public_transfer(pool, USER1);
+            assert!(spot::get_total_yes_escrow(&rec) == 250 * SCALING, 1);
             test_scenario::return_shared(rec);
-            test_scenario::return_shared(spt_reg);
-            test_scenario::return_shared(spt_cfg);
             test_scenario::return_shared(spot_cfg);
-            test_scenario::return_to_sender(&scen, platform);
-            test_scenario::return_shared(bl);
             test_scenario::return_shared(post_ref);
         };
 

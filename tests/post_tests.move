@@ -18,7 +18,7 @@ module social_contracts::post_tests {
     use social_contracts::post::{Self, Post, Comment, PostConfig, PredictionData, PromotionData};
     use social_contracts::profile::UsernameRegistry;
     use social_contracts::block_list::{Self, BlockListRegistry};
-    use social_contracts::my_ip::{Self, MyIPRegistry};
+    use social_contracts::mydata::{Self, MyDataRegistry};
     
     // Test constants
     const TEST_CONTENT: vector<u8> = b"This is a test post";
@@ -426,7 +426,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };
@@ -504,7 +504,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };
@@ -556,7 +556,7 @@ module social_contracts::post_tests {
             let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let post = test_scenario::take_shared<Post>(&scenario);
             let block_list_registry = test_scenario::take_shared<BlockListRegistry>(&scenario);
-            let my_ip_registry = test_scenario::take_shared<MyIPRegistry>(&scenario);
+            let mydata_registry = test_scenario::take_shared<MyDataRegistry>(&scenario);
             
             // Get the profile ID for the comment
             let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(&registry, USER1);
@@ -575,7 +575,7 @@ module social_contracts::post_tests {
             test_scenario::return_shared(post);
             test_scenario::return_shared(registry);
             test_scenario::return_shared(block_list_registry);
-            test_scenario::return_shared(my_ip_registry);
+            test_scenario::return_shared(mydata_registry);
         };
         
         // USER1 deletes their comment
@@ -627,7 +627,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };
@@ -698,7 +698,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };
@@ -766,7 +766,7 @@ module social_contracts::post_tests {
             let registry = test_scenario::take_shared<UsernameRegistry>(&scenario);
             let post = test_scenario::take_shared<Post>(&scenario);
             let block_list_registry = test_scenario::take_shared<BlockListRegistry>(&scenario);
-            let my_ip_registry = test_scenario::take_shared<MyIPRegistry>(&scenario);
+            let mydata_registry = test_scenario::take_shared<MyDataRegistry>(&scenario);
             
             // Get the profile ID for USER2
             let mut profile_id_option = social_contracts::profile::lookup_profile_by_owner(&registry, USER2);
@@ -785,7 +785,7 @@ module social_contracts::post_tests {
             test_scenario::return_shared(post);
             test_scenario::return_shared(registry);
             test_scenario::return_shared(block_list_registry);
-            test_scenario::return_shared(my_ip_registry);
+            test_scenario::return_shared(mydata_registry);
         };
         
         // USER1 attempts to delete USER2's comment - should fail
@@ -823,7 +823,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };
@@ -901,7 +901,7 @@ module social_contracts::post_tests {
             social_contracts::profile::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::platform::test_init(test_scenario::ctx(&mut scenario));
             social_contracts::block_list::test_init(test_scenario::ctx(&mut scenario));
-            social_contracts::my_ip::test_init(test_scenario::ctx(&mut scenario));
+            social_contracts::mydata::test_init(test_scenario::ctx(&mut scenario));
             // Initialize the post module
             post::test_init(test_scenario::ctx(&mut scenario));
         };

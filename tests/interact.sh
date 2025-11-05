@@ -641,12 +641,12 @@ create_license() {
     
     # Convert user-friendly inputs to permission flags
     case $permissions_input in
-        "CC-BY") permissions="my_ip::cc_by_license_flags()" ;;
-        "CC-BY-SA") permissions="my_ip::cc_by_sa_license_flags()" ;;
-        "CC-BY-NC") permissions="my_ip::cc_by_nc_license_flags()" ;;
-        "CC-BY-ND") permissions="my_ip::cc_by_nd_license_flags()" ;;
-        "PERSONAL") permissions="my_ip::personal_use_license_flags()" ;;
-        "TOKEN-BOUND") permissions="my_ip::token_bound_license_flags()" ;;
+        "CC-BY") permissions="mydata::cc_by_license_flags()" ;;
+        "CC-BY-SA") permissions="mydata::cc_by_sa_license_flags()" ;;
+        "CC-BY-NC") permissions="mydata::cc_by_nc_license_flags()" ;;
+        "CC-BY-ND") permissions="mydata::cc_by_nd_license_flags()" ;;
+        "PERSONAL") permissions="mydata::personal_use_license_flags()" ;;
+        "TOKEN-BOUND") permissions="mydata::token_bound_license_flags()" ;;
         *) permissions=$permissions_input ;;
     esac
     
@@ -682,7 +682,7 @@ create_license() {
     fi
     
     print_info "Creating IP license..."
-    myso client call --package $PACKAGE_ID --module my_ip --function create_license --args "$registry_id" "$profile_id" "$name" "$description" "$license_type" "$permissions" "$poc_id" "$license_uri" "$revenue_recipient" "$transferable" "$expires_at" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function create_license --args "$registry_id" "$profile_id" "$name" "$description" "$license_type" "$permissions" "$poc_id" "$license_uri" "$revenue_recipient" "$transferable" "$expires_at" --gas-budget $GAS_BUDGET
     
     print_success "IP license created!"
     
@@ -700,7 +700,7 @@ update_license_permissions() {
     read -p "Enter new permission flags: " new_permissions
     
     print_info "Updating license permissions..."
-    myso client call --package $PACKAGE_ID --module my_ip --function update_license_permissions --args "$registry_id" "$license_id" "$admin_cap_id" "$new_permissions" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function update_license_permissions --args "$registry_id" "$license_id" "$admin_cap_id" "$new_permissions" --gas-budget $GAS_BUDGET
     
     print_success "License permissions updated!"
     
@@ -718,7 +718,7 @@ update_revenue_recipient() {
     read -p "Enter new revenue recipient address: " recipient
     
     print_info "Updating revenue recipient..."
-    myso client call --package $PACKAGE_ID --module my_ip --function update_revenue_recipient --args "$registry_id" "$license_id" "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function update_revenue_recipient --args "$registry_id" "$license_id" "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
     
     print_success "Revenue recipient updated!"
     
@@ -736,7 +736,7 @@ set_license_state() {
     read -p "Enter new state (0=Active, 1=Expired, 2=Revoked): " new_state
     
     print_info "Setting license state..."
-    myso client call --package $PACKAGE_ID --module my_ip --function set_license_state --args "$registry_id" "$license_id" "$admin_cap_id" "$new_state" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function set_license_state --args "$registry_id" "$license_id" "$admin_cap_id" "$new_state" --gas-budget $GAS_BUDGET
     
     print_success "License state updated!"
     
@@ -753,7 +753,7 @@ transfer_license() {
     read -p "Enter recipient address: " recipient
     
     print_info "Transferring license..."
-    myso client call --package $PACKAGE_ID --module my_ip --function transfer_license --args "$license_id" "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function transfer_license --args "$license_id" "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
     
     print_success "License transferred to recipient!"
     
@@ -769,7 +769,7 @@ transfer_admin_cap() {
     read -p "Enter recipient address: " recipient
     
     print_info "Transferring admin capability..."
-    myso client call --package $PACKAGE_ID --module my_ip --function transfer_admin_cap --args "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
+    myso client call --package $PACKAGE_ID --module mydata --function transfer_admin_cap --args "$admin_cap_id" "$recipient" --gas-budget $GAS_BUDGET
     
     print_success "Admin capability transferred to recipient!"
     
@@ -1166,8 +1166,8 @@ sell_tokens() {
 # Upgrade Management Menu
 upgrade_menu() {
     print_header "Upgrade Management Menu"
-    echo "1. Migrate MyIP"
-    echo "2. Migrate MyIP Registry"
+    echo "1. Migrate MyData"
+    echo "2. Migrate MyData Registry"
     echo "3. Migrate Social Graph"
     echo "4. Migrate Profile"
     echo "5. Back to Main Menu"
@@ -1175,8 +1175,8 @@ upgrade_menu() {
     read -p "Select an option [1-5]: " choice
     
     case $choice in
-        1) migrate_my_ip ;;
-        2) migrate_my_ip_registry ;;
+        1) migrate_mydata ;;
+        2) migrate_mydata_registry ;;
         3) migrate_social_graph ;;
         4) migrate_profile ;;
         5) show_menu ;;
@@ -1184,33 +1184,33 @@ upgrade_menu() {
     esac
 }
 
-# Migrate MyIP
-migrate_my_ip() {
-    print_header "Migrating MyIP"
+# Migrate MyData
+migrate_mydata() {
+    print_header "Migrating MyData"
     
-    read -p "Enter MyIP ID: " my_ip_id
+    read -p "Enter MyData ID: " mydata_id
     read -p "Enter admin cap ID: " admin_cap_id
     
-    print_info "Migrating MyIP..."
-    myso client call --package $PACKAGE_ID --module my_ip --function migrate_my_ip --args "$my_ip_id" "$admin_cap_id" --gas-budget $GAS_BUDGET
+    print_info "Migrating MyData..."
+    myso client call --package $PACKAGE_ID --module mydata --function migrate_mydata --args "$mydata_id" "$admin_cap_id" --gas-budget $GAS_BUDGET
     
-    print_success "MyIP migrated to latest version!"
+    print_success "MyData migrated to latest version!"
     
     read -p "Press Enter to continue..."
     upgrade_menu
 }
 
-# Migrate MyIP Registry
-migrate_my_ip_registry() {
-    print_header "Migrating MyIP Registry"
+# Migrate MyData Registry
+migrate_mydata_registry() {
+    print_header "Migrating MyData Registry"
     
-    read -p "Enter MyIP registry ID: " registry_id
+    read -p "Enter MyData registry ID: " registry_id
     read -p "Enter admin cap ID: " admin_cap_id
     
-    print_info "Migrating MyIP registry..."
-    myso client call --package $PACKAGE_ID --module my_ip --function migrate_registry --args "$registry_id" "$admin_cap_id" --gas-budget $GAS_BUDGET
+    print_info "Migrating MyData registry..."
+    myso client call --package $PACKAGE_ID --module mydata --function migrate_registry --args "$registry_id" "$admin_cap_id" --gas-budget $GAS_BUDGET
     
-    print_success "MyIP registry migrated to latest version!"
+    print_success "MyData registry migrated to latest version!"
     
     read -p "Press Enter to continue..."
     upgrade_menu

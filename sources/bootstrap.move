@@ -69,11 +69,12 @@ module social_contracts::bootstrap {
         social_contracts::social_graph::bootstrap_init(ctx);
         social_contracts::profile::bootstrap_init(ctx);
         social_contracts::block_list::bootstrap_init(ctx);
-        social_contracts::my_ip::bootstrap_init(ctx);
+        social_contracts::mydata::bootstrap_init(ctx);
         social_contracts::governance::bootstrap_init(ctx);
         social_contracts::post::bootstrap_init(ctx);
         social_contracts::social_proof_tokens::bootstrap_init(ctx);
         social_contracts::proof_of_creativity::bootstrap_init(ctx);
+        social_contracts::message::bootstrap_init(ctx);
         
         // === CREATE ALL ADMIN CAPABILITIES ===
         
@@ -100,7 +101,7 @@ module social_contracts::bootstrap {
         // Create GovernanceAdminCap for governance administration
         let governance_admin_cap = governance::create_governance_admin_cap(ctx);
         transfer::public_transfer(governance_admin_cap, admin);
-        
+
         // Mark the bootstrap key as used - this cannot be undone
         key.used = true;
     }

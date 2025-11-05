@@ -1,12 +1,13 @@
 
 [move]
 version = 3
-manifest_digest = "54F771BCF842A010D72D8102AFA84442BD699F00C6BEC92DAE0D01B4124E9DCD"
-deps_digest = "060AD7E57DFB13104F21BE5F5C3759D03F0553FC3229247D9A7A6B45F50D03A3"
+manifest_digest = "6B3C85E368EF895E4732E2276D17F74245C5791F63560E6A8FE18F510C116E86"
+deps_digest = "F9B494B64F0615AED0E98FC12A85B85ECD2BC5185C22D30E7F67786BB52E507C"
 dependencies = [
   { id = "MoveStdlib", name = "MoveStdlib" },
   { id = "MySocial", name = "MySocial" },
-  { id = "seal", name = "seal" },
+  { id = "MyUSD", name = "MyUSD" },
+  { id = "mydata", name = "mydata" },
 ]
 
 [[move.package]]
@@ -22,8 +23,17 @@ dependencies = [
 ]
 
 [[move.package]]
-id = "seal"
-source = { local = "../seal" }
+id = "MyUSD"
+source = { local = "../myusd" }
+
+dependencies = [
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "MySocial", name = "MySocial" },
+]
+
+[[move.package]]
+id = "mydata"
+source = { local = "../mydata" }
 
 dependencies = [
   { id = "MoveStdlib", name = "MoveStdlib" },

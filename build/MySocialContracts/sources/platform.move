@@ -17,7 +17,7 @@ module social_contracts::platform {
         table::{Self, Table},
         coin::{Self, Coin},
         balance::{Self, Balance},
-        mys::MYS,
+        myso::MYSO,
         event
     };
     
@@ -90,8 +90,8 @@ module social_contracts::platform {
         shutdown_date: Option<String>,
         /// Creation timestamp
         created_at: u64,
-        /// Platform-specific MYS tokens treasury
-        treasury: Balance<MYS>,
+        /// Platform-specific MYSO tokens treasury
+        treasury: Balance<MYSO>,
         /// Whether the platform wants DAO governance
         wants_dao_governance: bool,
         /// DAO governance configuration parameters (all optional)
@@ -500,10 +500,10 @@ module social_contracts::platform {
         &mut registry.version
     }
 
-    /// Add MYS tokens to platform treasury
+    /// Add MYSO tokens to platform treasury
     public entry fun add_to_treasury(
         platform: &mut Platform,
-        coin: &mut Coin<MYS>,
+        coin: &mut Coin<MYSO>,
         amount: u64,
         ctx: &mut TxContext
     ) {

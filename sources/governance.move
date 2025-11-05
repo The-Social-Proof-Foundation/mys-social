@@ -22,7 +22,7 @@ module social_contracts::governance {
     };
     use mys::mys::MYS;
 
-    use seal::bf_hmac_encryption::{EncryptedObject, VerifiedDerivedKey, PublicKey, decrypt};
+    use mydata::bf_hmac_encryption::{EncryptedObject, VerifiedDerivedKey, PublicKey, decrypt};
     
     use social_contracts::upgrade::{Self, UpgradeAdminCap};
     use social_contracts::profile;
@@ -45,6 +45,10 @@ module social_contracts::governance {
     const EAlreadyNominated: u64 = 16;
     const EWrongVersion: u64 = 17;
     const EDelegateAnonNotAllowed: u64 = 18;
+    const EOverflow: u64 = 19;
+
+    /// Maximum u64 value for overflow protection
+    const MAX_U64: u64 = 18446744073709551615;
 
     /// Proposal type constants
     const PROPOSAL_TYPE_ECOSYSTEM: u8 = 0;
@@ -477,8 +481,10 @@ module social_contracts::governance {
                 
                 // Add new vote
                 if (upvote) {
+                    assert!(delegate.upvotes <= MAX_U64 - 1, EOverflow);
                     delegate.upvotes = delegate.upvotes + 1;
                 } else {
+                    assert!(delegate.downvotes <= MAX_U64 - 1, EOverflow);
                     delegate.downvotes = delegate.downvotes + 1;
                 };
                 
@@ -487,8 +493,10 @@ module social_contracts::governance {
             } else {
                 // First time voting for this target
                 if (upvote) {
+                    assert!(delegate.upvotes <= MAX_U64 - 1, EOverflow);
                     delegate.upvotes = delegate.upvotes + 1;
                 } else {
+                    assert!(delegate.downvotes <= MAX_U64 - 1, EOverflow);
                     delegate.downvotes = delegate.downvotes + 1;
                 };
                 
@@ -529,8 +537,10 @@ module social_contracts::governance {
                 
                 // Add new vote
                 if (upvote) {
+                    assert!(nominee.upvotes <= MAX_U64 - 1, EOverflow);
                     nominee.upvotes = nominee.upvotes + 1;
                 } else {
+                    assert!(nominee.downvotes <= MAX_U64 - 1, EOverflow);
                     nominee.downvotes = nominee.downvotes + 1;
                 };
                 
@@ -539,8 +549,10 @@ module social_contracts::governance {
             } else {
                 // First time voting for this nominee
                 if (upvote) {
+                    assert!(nominee.upvotes <= MAX_U64 - 1, EOverflow);
                     nominee.upvotes = nominee.upvotes + 1;
                 } else {
+                    assert!(nominee.downvotes <= MAX_U64 - 1, EOverflow);
                     nominee.downvotes = nominee.downvotes + 1;
                 };
                 

@@ -77,6 +77,8 @@ module social_contracts::social_proof_tokens {
     const EBlockedUser: u64 = 20;
     /// Trading is halted by emergency kill switch
     const ETradingHalted: u64 = 21;
+    /// Arithmetic overflow detected
+    const EOverflow: u64 = 22;
 
     // === Constants ===
     // Token types
@@ -100,6 +102,9 @@ module social_contracts::social_proof_tokens {
     const DEFAULT_POST_THRESHOLD: u64 = 1_000_000_000_000; // 1,000 MYS in smallest units (9 decimals)
     const DEFAULT_PROFILE_THRESHOLD: u64 = 10_000_000_000_000; // 10,000 MYS in smallest units (9 decimals)
     const DEFAULT_MAX_INDIVIDUAL_RESERVATION_BPS: u64 = 2000; // 20% (1/5 of threshold)
+
+    // Maximum u64 value for overflow protection
+    const MAX_U64: u64 = 18446744073709551615;
 
     // === Structs ===
 
@@ -539,16 +544,19 @@ module social_contracts::social_proof_tokens {
         // Update reserver's balance in the pool
         if (table::contains(&reservation_pool_object.reservations, reserver)) {
             let reservation_balance = table::borrow_mut(&mut reservation_pool_object.reservations, reserver);
+            assert!(*reservation_balance <= MAX_U64 - amount, EOverflow);
             *reservation_balance = *reservation_balance + amount;
         } else {
             table::add(&mut reservation_pool_object.reservations, reserver, amount);
             // Add to reservers list for tracking
             vector::push_back(&mut reservation_pool_object.info.reservers, reserver);
         };
-        
+
         // Update total reserved
+
+        assert!(reservation_pool_object.info.total_reserved <= MAX_U64 - amount, EOverflow);
         reservation_pool_object.info.total_reserved = reservation_pool_object.info.total_reserved + amount;
-        
+
         // Update registry
         if (table::contains(&registry.reservation_pools, post_id)) {
             let registry_pool = table::borrow_mut(&mut registry.reservation_pools, post_id);
@@ -639,20 +647,23 @@ module social_contracts::social_proof_tokens {
         // Extract reservation payment
         let reservation_payment = coin::split(&mut payment, amount, ctx);
         balance::join(&mut reservation_pool_object.mys_balance, coin::into_balance(reservation_payment));
-        
+
         // Update reserver's balance in the pool
         if (table::contains(&reservation_pool_object.reservations, reserver)) {
             let reservation_balance = table::borrow_mut(&mut reservation_pool_object.reservations, reserver);
+            assert!(*reservation_balance <= MAX_U64 - amount, EOverflow);
             *reservation_balance = *reservation_balance + amount;
         } else {
             table::add(&mut reservation_pool_object.reservations, reserver, amount);
             // Add to reservers list for tracking
             vector::push_back(&mut reservation_pool_object.info.reservers, reserver);
         };
-        
+
         // Update total reserved
+
+        assert!(reservation_pool_object.info.total_reserved <= MAX_U64 - amount, EOverflow);
         reservation_pool_object.info.total_reserved = reservation_pool_object.info.total_reserved + amount;
-        
+
         // Update registry
         if (table::contains(&registry.reservation_pools, profile_id)) {
             let registry_pool = table::borrow_mut(&mut registry.reservation_pools, profile_id);
@@ -1193,8 +1204,10 @@ module social_contracts::social_proof_tokens {
         
         // Update holder's balance
         table::add(&mut pool.holders, buyer, amount);
-        
+
         // Update circulating supply
+
+        assert!(pool.info.circulating_supply <= MAX_U64 - amount, EOverflow);
         pool.info.circulating_supply = pool.info.circulating_supply + amount;
         
         // Mint new social token for the user
@@ -1322,15 +1335,20 @@ module social_contracts::social_proof_tokens {
         // Update holder's balance
         if (table::contains(&pool.holders, buyer)) {
             let holder_balance = table::borrow_mut(&mut pool.holders, buyer);
+            assert!(*holder_balance <= MAX_U64 - amount, EOverflow);
             *holder_balance = *holder_balance + amount;
         } else {
             table::add(&mut pool.holders, buyer, amount);
         };
-        
+
         // Update circulating supply
+
+        assert!(pool.info.circulating_supply <= MAX_U64 - amount, EOverflow);
         pool.info.circulating_supply = pool.info.circulating_supply + amount;
-        
+
         // Update the user's social token
+
+        assert!(social_token.amount <= MAX_U64 - amount, EOverflow);
         social_token.amount = social_token.amount + amount;
         
         // Calculate the new price after purchase
@@ -1595,6 +1613,11 @@ module social_contracts::social_proof_tokens {
     public fun clear_poc_redirection(pool: &mut TokenPool) {
         pool.poc_redirect_to = option::none();
         pool.poc_redirect_percentage = option::none();
+    }
+
+    /// Get the ecosystem treasury address from config
+    public fun get_ecosystem_treasury(config: &SocialProofTokensConfig): address {
+        config.ecosystem_treasury
     }
 
     // Test-only functions

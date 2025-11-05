@@ -7,7 +7,7 @@ This directory contains test modules for the MySocial network features. These te
 - `profile_tests.move`: Tests for profile creation and management
 - `post_tests.move`: Tests for posts, comments, likes, and other content interactions
 - `social_graph_tests.move`: Tests for follow/unfollow functionality and social relationships
-- `my_ip_tests.move`: Tests for intellectual property licensing and management
+- `mydata_tests.move`: Tests for data monetization and management
 - `platform_tests.move`: Tests for platform creation, administration, and badge management
 - `block_list_tests.move`: Tests for user blocking functionality
 - `governance_tests.move`: Tests for governance proposals and voting
@@ -41,7 +41,7 @@ myso move test --filter post_tests
 myso move test --filter social_graph_tests
 
 # Run intellectual property tests
-myso move test --filter my_ip_tests
+myso move test --filter mydata_tests
 
 # Run platform tests
 myso move test --filter platform_tests
@@ -138,7 +138,7 @@ The test suite covers the following key functionality:
 | profile | ✅ Complete | High |
 | social_graph | ✅ Complete | High |
 | post | ✅ Complete | High |
-| my_ip | ✅ Complete | High |
+| mydata | ✅ Complete | High |
 | platform | ✅ Complete | High |
 | block_list | ✅ Complete | High |
 | governance | ✅ Complete | High |

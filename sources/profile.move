@@ -47,11 +47,15 @@ module social_contracts::profile {
     // Vesting error codes
     const EInvalidStartTime: u64 = 15;
     const ENotVestingWalletOwner: u64 = 16;
+    const EOverflow: u64 = 17;
 
     const PROFILE_SALE_FEE_BPS: u64 = 500;
-    
+
     // Fixed-point precision for curve calculations (1000 = 1.0)
     const CURVE_PRECISION: u64 = 1000;
+
+    // Maximum u64 value for overflow protection
+    const MAX_U64: u64 = 18446744073709551615;
 
     /// Reserved usernames that cannot be registered
     const RESERVED_NAMES: vector<vector<u8>> = vector[
@@ -83,8 +87,8 @@ module social_contracts::profile {
     const USERNAME_FIELD: vector<u8> = b"username";
     // Field name for offers
     const OFFERS_FIELD: vector<u8> = b"profile_offers";
-    // Field for storing MyIP data references
-    const MY_IP_DATA_FIELD: vector<u8> = b"my_ip_data";
+    // Field for storing MyData references
+    const MYDATA_FIELD: vector<u8> = b"mydata";
 
     /// Social Ecosystem Treasury that receives fees from profile sales
     public struct EcosystemTreasury has key {
@@ -145,8 +149,12 @@ module social_contracts::profile {
         min_offer_amount: Option<u64>,
         /// Collection of badges assigned to the profile
         badges: vector<ProfileBadge>,
-        /// Vector tracking attached MyIP IDs for efficient iteration
-        attached_my_ip_ids: vector<address>,
+        /// Vector tracking attached MyData IDs for efficient iteration
+        attached_mydata_ids: vector<address>,
+        /// Paid messaging: minimum cost to send a message to this profile (optional)
+        min_message_cost: Option<u64>,
+        /// Paid messaging: toggle to enable/disable paid messaging
+        paid_messaging_enabled: bool,
     }
 
     /// Profile Badge that can be assigned to profiles by platform admins/moderators
@@ -490,7 +498,9 @@ module social_contracts::profile {
             tips_received: 0,
             min_offer_amount: option::none(),
             badges: vector::empty<ProfileBadge>(),
-            attached_my_ip_ids: vector::empty<address>(),
+            attached_mydata_ids: vector::empty<address>(),
+            min_message_cost: option::none(),
+            paid_messaging_enabled: false,
         };
         
         // Get the profile ID
@@ -891,6 +901,7 @@ module social_contracts::profile {
 
     /// Increment followers count (called by follow module)
     public fun increment_followers_count(profile: &mut Profile): u64 {
+        assert!(profile.followers_count <= MAX_U64 - 1, EOverflow);
         profile.followers_count = profile.followers_count + 1;
         profile.followers_count
     }
@@ -905,6 +916,7 @@ module social_contracts::profile {
 
     /// Increment post count (called by post module when creating a post)
     public fun increment_post_count(profile: &mut Profile): u64 {
+        assert!(profile.post_count <= MAX_U64 - 1, EOverflow);
         profile.post_count = profile.post_count + 1;
         profile.post_count
     }
@@ -919,6 +931,7 @@ module social_contracts::profile {
 
     /// Add tips received (called by post/comment module when tipping)
     public fun add_tips_received(profile: &mut Profile, amount: u64): u64 {
+        assert!(profile.tips_received <= MAX_U64 - amount, EOverflow);
         profile.tips_received = profile.tips_received + amount;
         profile.tips_received
     }
@@ -930,6 +943,7 @@ module social_contracts::profile {
 
     /// Increment following count (called when this profile follows another profile)
     public fun increment_following_count(profile: &mut Profile): u64 {
+        assert!(profile.following_count <= MAX_U64 - 1, EOverflow);
         profile.following_count = profile.following_count + 1;
         profile.following_count
     }
@@ -963,71 +977,71 @@ module social_contracts::profile {
         subscription::is_subscription_valid(subscription, service, clock)
     }
 
-    /// Attach MyIP to profile for data monetization
-    public entry fun attach_my_ip(
+    /// Attach MyData to profile for data monetization
+    public entry fun attach_mydata(
         profile: &mut Profile,
-        my_ip_id: address,
+        mydata_id: address,
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
         
         // Initialize table if it doesn't exist
-        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+        if (!dynamic_field::exists_(&profile.id, MYDATA_FIELD)) {
             let tbl = table::new<address, bool>(ctx);
-            dynamic_field::add(&mut profile.id, MY_IP_DATA_FIELD, tbl);
+            dynamic_field::add(&mut profile.id, MYDATA_FIELD, tbl);
         };
         
         let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
             &mut profile.id,
-            MY_IP_DATA_FIELD,
+            MYDATA_FIELD,
         );
         
         // Only add if not already attached
-        if (!table::contains(tbl, my_ip_id)) {
-            table::add(tbl, my_ip_id, true);
+        if (!table::contains(tbl, mydata_id)) {
+            table::add(tbl, mydata_id, true);
             // Also add to the tracking vector for efficient iteration
-            vector::push_back(&mut profile.attached_my_ip_ids, my_ip_id);
+            vector::push_back(&mut profile.attached_mydata_ids, mydata_id);
         };
     }
 
-    /// Check if a MyIP is attached to this profile
-    public fun has_my_ip_attached(profile: &Profile, my_ip_id: address): bool {
-        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+    /// Check if a MyData is attached to this profile
+    public fun has_mydata_attached(profile: &Profile, mydata_id: address): bool {
+        if (!dynamic_field::exists_(&profile.id, MYDATA_FIELD)) {
             return false
         };
         let tbl = dynamic_field::borrow<vector<u8>, Table<address, bool>>(
             &profile.id,
-            MY_IP_DATA_FIELD,
+            MYDATA_FIELD,
         );
-        table::contains(tbl, my_ip_id)
+        table::contains(tbl, mydata_id)
     }
 
-    /// Remove a MyIP attachment from the profile
-    public entry fun detach_my_ip(
+    /// Remove a MyData attachment from the profile
+    public entry fun detach_mydata(
         profile: &mut Profile,
-        my_ip_id: address,
+        mydata_id: address,
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
         
-        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+        if (!dynamic_field::exists_(&profile.id, MYDATA_FIELD)) {
             return
         };
         
         let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
             &mut profile.id,
-            MY_IP_DATA_FIELD,
+            MYDATA_FIELD,
         );
         
-        if (table::contains(tbl, my_ip_id)) {
-            table::remove(tbl, my_ip_id);
+        if (table::contains(tbl, mydata_id)) {
+            table::remove(tbl, mydata_id);
             
             // Also remove from the tracking vector
             let mut i = 0;
-            let len = vector::length(&profile.attached_my_ip_ids);
+            let len = vector::length(&profile.attached_mydata_ids);
             while (i < len) {
-                if (*vector::borrow(&profile.attached_my_ip_ids, i) == my_ip_id) {
-                    vector::remove(&mut profile.attached_my_ip_ids, i);
+                if (*vector::borrow(&profile.attached_mydata_ids, i) == mydata_id) {
+                    vector::remove(&mut profile.attached_mydata_ids, i);
                     break
                 };
                 i = i + 1;
@@ -1035,79 +1049,79 @@ module social_contracts::profile {
         };
     }
 
-    /// Get all attached MyIP IDs for this profile
-    public fun get_attached_my_ips(profile: &Profile): vector<address> {
-        // Return a copy of the attached MyIP IDs vector for efficient iteration
-        profile.attached_my_ip_ids
+    /// Get all attached MyData IDs for this profile
+    public fun get_attached_mydata(profile: &Profile): vector<address> {
+        // Return a copy of the attached MyData IDs vector for efficient iteration
+        profile.attached_mydata_ids
     }
 
-    /// Batch attach multiple MyIPs to profile for gas optimization
-    public entry fun batch_attach_my_ips(
+    /// Batch attach multiple MyData to profile for gas optimization
+    public entry fun batch_attach_mydata(
         profile: &mut Profile,
-        my_ip_ids: vector<address>,
+        mydata_ids: vector<address>,
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
         
         // Initialize table if it doesn't exist
-        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+        if (!dynamic_field::exists_(&profile.id, MYDATA_FIELD)) {
             let tbl = table::new<address, bool>(ctx);
-            dynamic_field::add(&mut profile.id, MY_IP_DATA_FIELD, tbl);
+            dynamic_field::add(&mut profile.id, MYDATA_FIELD, tbl);
         };
         
         let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
             &mut profile.id,
-            MY_IP_DATA_FIELD,
+            MYDATA_FIELD,
         );
         
         let mut i = 0;
-        let len = vector::length(&my_ip_ids);
+        let len = vector::length(&mydata_ids);
         
         while (i < len) {
-            let my_ip_id = *vector::borrow(&my_ip_ids, i);
+            let mydata_id = *vector::borrow(&mydata_ids, i);
             
             // Only add if not already attached
-            if (!table::contains(tbl, my_ip_id)) {
-                table::add(tbl, my_ip_id, true);
-                vector::push_back(&mut profile.attached_my_ip_ids, my_ip_id);
+            if (!table::contains(tbl, mydata_id)) {
+                table::add(tbl, mydata_id, true);
+                vector::push_back(&mut profile.attached_mydata_ids, mydata_id);
             };
             
             i = i + 1;
         };
     }
 
-    /// Batch detach multiple MyIPs from profile for gas optimization
-    public entry fun batch_detach_my_ips(
+    /// Batch detach multiple MyData from profile for gas optimization
+    public entry fun batch_detach_mydata(
         profile: &mut Profile,
-        my_ip_ids: vector<address>,
+        mydata_ids: vector<address>,
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == profile.owner, EUnauthorized);
         
-        if (!dynamic_field::exists_(&profile.id, MY_IP_DATA_FIELD)) {
+        if (!dynamic_field::exists_(&profile.id, MYDATA_FIELD)) {
             return
         };
         
         let tbl = dynamic_field::borrow_mut<vector<u8>, Table<address, bool>>(
             &mut profile.id,
-            MY_IP_DATA_FIELD,
+            MYDATA_FIELD,
         );
         
         let mut i = 0;
-        let len = vector::length(&my_ip_ids);
+        let len = vector::length(&mydata_ids);
         
         while (i < len) {
-            let my_ip_id = *vector::borrow(&my_ip_ids, i);
+            let mydata_id = *vector::borrow(&mydata_ids, i);
             
-            if (table::contains(tbl, my_ip_id)) {
-                table::remove(tbl, my_ip_id);
+            if (table::contains(tbl, mydata_id)) {
+                table::remove(tbl, mydata_id);
                 
                 // Remove from tracking vector
                 let mut j = 0;
-                let vec_len = vector::length(&profile.attached_my_ip_ids);
+                let vec_len = vector::length(&profile.attached_mydata_ids);
                 while (j < vec_len) {
-                    if (*vector::borrow(&profile.attached_my_ip_ids, j) == my_ip_id) {
-                        vector::remove(&mut profile.attached_my_ip_ids, j);
+                    if (*vector::borrow(&profile.attached_mydata_ids, j) == mydata_id) {
+                        vector::remove(&mut profile.attached_mydata_ids, j);
                         break
                     };
                     j = j + 1;
@@ -1465,7 +1479,9 @@ module social_contracts::profile {
             following_count: 0,
             min_offer_amount: option::none(),
             badges: vector::empty<ProfileBadge>(),
-            attached_my_ip_ids: vector::empty<address>(),
+            attached_mydata_ids: vector::empty<address>(),
+            min_message_cost: option::none(),
+            paid_messaging_enabled: false,
         };
         
         // Get the profile ID and use it for registration
@@ -1736,6 +1752,7 @@ module social_contracts::profile {
         // Only proceed if there are tokens to claim
         if (claimable_amount > 0) {
             // Update claimed amount
+            assert!(wallet.claimed_amount <= MAX_U64 - claimable_amount, EOverflow);
             wallet.claimed_amount = wallet.claimed_amount + claimable_amount;
             
             // Create coin from the claimable balance and transfer to owner
@@ -1903,6 +1920,37 @@ module social_contracts::profile {
     /// Get the curve factor of a vesting wallet
     public fun vesting_curve_factor(wallet: &VestingWallet): u64 {
         wallet.curve_factor
+    }
+
+    // === Paid Messaging Functions ===
+
+    /// Set paid messaging settings for a profile (owner only)
+    public entry fun set_paid_messaging_settings(
+        profile: &mut Profile,
+        enabled: bool,
+        min_cost: Option<u64>,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(profile.owner == sender, EUnauthorized);
+
+        profile.paid_messaging_enabled = enabled;
+        profile.min_message_cost = min_cost;
+    }
+
+    /// Get paid messaging settings for a profile
+    public fun get_paid_messaging_settings(profile: &Profile): (bool, Option<u64>) {
+        (profile.paid_messaging_enabled, profile.min_message_cost)
+    }
+
+    /// Check if a profile requires paid messages
+    public fun requires_paid_message(profile: &Profile): bool {
+        profile.paid_messaging_enabled && option::is_some(&profile.min_message_cost)
+    }
+
+    /// Get minimum message cost for a profile
+    public fun get_min_message_cost(profile: &Profile): Option<u64> {
+        profile.min_message_cost
     }
 
 }

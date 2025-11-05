@@ -21,7 +21,7 @@ MySocial is a feature-rich decentralized social platform that combines tradition
 - **Social Connections**: Link social media accounts (Twitter, GitHub, Instagram, etc.)
 - **Profile Trading**: Buy/sell profiles with offers and automated fee distribution
 - **Badge System**: Platform-issued verification and achievement badges
-- **MyIP Integration**: Attach data monetization assets to profiles
+- **MyData Integration**: Attach data monetization assets to profiles
 
 **Key Features:**
 - Profile ownership transfer
@@ -95,14 +95,14 @@ MySocial is a feature-rich decentralized social platform that combines tradition
 - **Flexible Pricing**: Profile owners set their own subscription rates
 - **Access Control**: Integration with content gating systems
 
-### 8. **Data Monetization** (`my_ip.move`)
-- **Encrypted Content**: Sell access to encrypted data using Seal encryption
+### 8. **Data Monetization** (`mydata.move`)
+- **Encrypted Content**: Sell access to encrypted data using MyData encryption
 - **Dual Pricing**: One-time purchases or subscription-based access
 - **Rich Metadata**: Comprehensive data categorization and discovery
 - **Access Management**: Granular control over who can access content
 - **Revenue Optimization**: Multiple monetization strategies per data asset
 
-**MyIP Features:**
+**MyData Features:**
 - Time-range data for analytics
 - Geographic and quality metadata
 - Subscription duration flexibility
